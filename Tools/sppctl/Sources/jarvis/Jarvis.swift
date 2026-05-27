@@ -22,17 +22,84 @@ struct Jarvis: ParsableCommand {
         It does not execute shell commands or run unattended automation.
 
         Examples:
-          jarvis task create "review the runtime ops notes" --context SPPStudio --allowed-file SPPStudioDocs/50_RuntimeOps/
+          jarvis
+          jarvis status
+          jarvis new "review the runtime ops notes" --context SPPStudio --allowed-file SPPStudioDocs/50_RuntimeOps/
+          jarvis list
+          jarvis next
           jarvis retrieve --query "architecture memory" --scope architecture
           jarvis packet <task-id> --role codex
+          jarvis done <task-id> --note "validated"
+          jarvis history <task-id>
         """,
         subcommands: [
+            ShellCommand.self,
+            OverviewCommand.self,
             StatusCommand.self,
+            NewCommand.self,
+            ListCommand.self,
+            NextCommand.self,
+            DoneCommand.self,
+            HistoryCommand.self,
+            ShowCommand.self,
+            WritebackCommand.self,
+            OpenCommand.self,
             TaskCommand.self,
             RetrieveCommand.self,
             PacketCommand.self
         ]
     )
+
+    @OptionGroup var options: OpenJarvisCLIOptions
+
+    func run() throws {
+        var repl = OpenJarvisREPL(databaseURL: options.databaseURL())
+        try repl.run()
+    }
+}
+
+struct ShellCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "shell",
+        abstract: "Start the interactive manual-first OpenJarvis shell"
+    )
+
+    @OptionGroup var options: OpenJarvisCLIOptions
+
+    func run() throws {
+        var repl = OpenJarvisREPL(databaseURL: options.databaseURL())
+        try repl.run()
+    }
+}
+
+struct OverviewCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "overview",
+        abstract: "Show status, open tasks, and common manual commands"
+    )
+
+    @OptionGroup var options: OpenJarvisCLIOptions
+
+    func run() throws {
+        let snapshot = try OpenJarvisStatusReader.read(databaseURL: options.databaseURL())
+        let vaultStatus = resolveVaultStatus()
+        print(renderStatus(snapshot: snapshot, vaultStatus: vaultStatus))
+        print("")
+
+        guard snapshot.databaseExists else {
+            print("[jarvis] open tasks")
+            print("  database does not exist yet")
+            print("")
+            printCommonCommands()
+            return
+        }
+
+        let store = try OpenJarvisStore(databaseURL: options.databaseURL())
+        let openTasks = try store.listTasks().filter { $0.completionState == .open }
+        print(renderTaskList(openTasks, label: "open tasks", emptyMessage: "no open tasks"))
+        print("")
+        printCommonCommands()
+    }
 }
 
 struct StatusCommand: ParsableCommand {
@@ -47,6 +114,260 @@ struct StatusCommand: ParsableCommand {
         let snapshot = try OpenJarvisStatusReader.read(databaseURL: options.databaseURL())
         let vaultStatus = resolveVaultStatus()
         print(renderStatus(snapshot: snapshot, vaultStatus: vaultStatus))
+    }
+}
+
+struct NewCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "new",
+        abstract: "Create a new manual OpenJarvis task",
+        discussion: "Alias for: jarvis task create"
+    )
+
+    @OptionGroup var options: OpenJarvisCLIOptions
+
+    @Argument(help: "Raw user request")
+    var rawRequest: String
+
+    @Option(name: .long, help: "Interpreted objective (defaults to the raw request)")
+    var objective: String?
+
+    @Option(name: .long, help: "Project or context hint")
+    var context: String?
+
+    @Option(name: .long, help: "Trust zone label")
+    var trustZone: String = "safe"
+
+    @Option(name: .long, help: "Risk label")
+    var riskLevel: String = "medium"
+
+    @Option(name: .long, help: "Allowed files or paths")
+    var allowedFile: [String] = []
+
+    @Option(name: .long, help: "Forbidden files or paths")
+    var forbiddenFile: [String] = []
+
+    @Option(name: .long, help: "Target worker: claude | codex")
+    var worker: String?
+
+    @Option(name: .long, help: "Needed memory tags or retrieval hints")
+    var memory: [String] = []
+
+    @Option(name: .long, help: "Next safe action")
+    var nextAction: String?
+
+    @Option(name: .long, help: "Vault root path if different from auto-discovery")
+    var vault: String?
+
+    @Option(name: .long, help: "Checkpoint policy: required | optional")
+    var checkpoint: String = "required"
+
+    @Option(name: .long, help: "Validation policy: required | optional")
+    var validation: String = "required"
+
+    @Option(name: .long, help: "Writeback policy: required | optional")
+    var writeback: String = "required"
+
+    func run() throws {
+        let store = try OpenJarvisStore(databaseURL: options.databaseURL())
+        let targetWorker = try parseWorker(worker)
+        let checkpointRequired = try parsePolicy(checkpoint, name: "checkpoint")
+        let validationRequired = try parsePolicy(validation, name: "validation")
+        let writebackRequired = try parsePolicy(writeback, name: "writeback")
+        let task = try store.createTask(
+            from: OpenJarvisTaskDraft(
+                rawRequest: rawRequest,
+                interpretedObjective: objective ?? rawRequest,
+                projectContext: context,
+                trustZone: trustZone,
+                riskLevel: riskLevel,
+                allowedFiles: allowedFile,
+                forbiddenFiles: forbiddenFile,
+                targetWorker: targetWorker,
+                neededMemory: memory,
+                checkpointRequired: checkpointRequired,
+                validationRequired: validationRequired,
+                memoryWritebackRequired: writebackRequired,
+                nextAction: nextAction,
+                vaultRoot: vault
+            )
+        )
+
+        print(taskSummary(task, label: "created"))
+    }
+}
+
+struct ListCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "list",
+        abstract: "List OpenJarvis tasks",
+        discussion: "Alias for: jarvis task list"
+    )
+
+    @Option(name: .long, help: "Filter by stage")
+    var stage: String?
+
+    @OptionGroup var options: OpenJarvisCLIOptions
+
+    func run() throws {
+        let store = try OpenJarvisStore(databaseURL: options.databaseURL())
+        let stageFilter = try parseStage(stage)
+        let tasks = try store.listTasks(stage: stageFilter)
+        print(renderTaskList(tasks, label: "tasks", emptyMessage: "no tasks"))
+    }
+}
+
+struct NextCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "next",
+        abstract: "Show the latest open task and suggested next command",
+        discussion: "Read-only. Does not advance task state."
+    )
+
+    @OptionGroup var options: OpenJarvisCLIOptions
+
+    func run() throws {
+        let snapshot = try OpenJarvisStatusReader.read(databaseURL: options.databaseURL())
+        guard snapshot.databaseExists else {
+            print("[jarvis] next")
+            print("  database does not exist yet")
+            print("  suggested: jarvis new \"your task\"")
+            return
+        }
+
+        let store = try OpenJarvisStore(databaseURL: options.databaseURL())
+        guard let task = try store.listTasks().first(where: { $0.completionState == .open }) else {
+            print("[jarvis] next")
+            print("  no open tasks")
+            print("  suggested: jarvis new \"your task\"")
+            return
+        }
+
+        print("[jarvis] next")
+        print("  task: \(task.id.prefix(8))")
+        print("  objective: \(task.objective)")
+        print("  stage: \(task.stage.rawValue)")
+        print("  worker: \(task.worker?.displayName ?? "unassigned")")
+        print("  updated: \(task.updatedAt)")
+        print("  suggested: \(suggestedCommand(for: task))")
+    }
+}
+
+struct DoneCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "done",
+        abstract: "Mark a task complete",
+        discussion: "Alias for: jarvis task complete"
+    )
+
+    @Argument(help: "Task ID")
+    var id: String
+
+    @Option(name: .long, help: "Completion note")
+    var note: String?
+
+    @OptionGroup var options: OpenJarvisCLIOptions
+
+    func run() throws {
+        let store = try OpenJarvisStore(databaseURL: options.databaseURL())
+        let task = try store.completeTask(id: try loadTaskID(store: store, token: id), note: note)
+        print(render(task: task))
+    }
+}
+
+struct HistoryCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "history",
+        abstract: "Show recent audit events for a task",
+        discussion: "Alias for: jarvis task history"
+    )
+
+    @Argument(help: "Task ID")
+    var id: String
+
+    @Option(name: .long, help: "Optional event type filter")
+    var type: String?
+
+    @Option(name: .long, help: "Maximum events to show")
+    var limit: Int = 20
+
+    @OptionGroup var options: OpenJarvisCLIOptions
+
+    func run() throws {
+        guard limit > 0 else {
+            throw ValidationError("History limit must be greater than 0.")
+        }
+        let store = try OpenJarvisStore(databaseURL: options.databaseURL())
+        let taskID = try loadTaskID(store: store, token: id)
+        let events = try store.listTaskEvents(taskID: taskID, type: type, limit: limit)
+        print(renderHistory(taskID: taskID, events: events, type: type, limit: limit))
+    }
+}
+
+struct ShowCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "show",
+        abstract: "Show a task",
+        discussion: "Alias for: jarvis task show"
+    )
+
+    @Argument(help: "Task ID")
+    var id: String
+
+    @OptionGroup var options: OpenJarvisCLIOptions
+
+    func run() throws {
+        let store = try OpenJarvisStore(databaseURL: options.databaseURL())
+        let task = try loadTask(store: store, token: id)
+        print(render(task: task))
+    }
+}
+
+struct WritebackCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "writeback",
+        abstract: "Mark a task's memory writeback complete",
+        discussion: "Alias for: jarvis task writeback"
+    )
+
+    @Argument(help: "Task ID")
+    var id: String
+
+    @Option(name: .long, help: "Writeback note")
+    var note: String?
+
+    @OptionGroup var options: OpenJarvisCLIOptions
+
+    func run() throws {
+        let store = try OpenJarvisStore(databaseURL: options.databaseURL())
+        let task = try store.writebackTask(id: try loadTaskID(store: store, token: id), note: note)
+        print(render(task: task))
+    }
+}
+
+struct OpenCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "open",
+        abstract: "Open the first related Obsidian note or allowed file for a task"
+    )
+
+    @Argument(help: "Task ID")
+    var id: String
+
+    @OptionGroup var options: OpenJarvisCLIOptions
+
+    func run() throws {
+        let store = try OpenJarvisStore(databaseURL: options.databaseURL())
+        let task = try loadTask(store: store, token: id)
+        let vault = try OpenJarvisPaths.vaultRoot()
+        let candidates = task.retrievedContext.map(\.path) + task.allowedFiles
+        guard let path = candidates.first else {
+            throw ValidationError("Task has no retrieved context or allowed files to open.")
+        }
+        let target = path.hasPrefix("/") ? URL(fileURLWithPath: path) : vault.appendingPathComponent(path)
+        try openURL(target)
+        print("[jarvis] opened")
+        print("  \(target.path)")
     }
 }
 
@@ -181,15 +502,7 @@ extension TaskCommand {
             let store = try OpenJarvisStore(databaseURL: options.databaseURL())
             let stageFilter = try parseStage(stage)
             let tasks = try store.listTasks(stage: stageFilter)
-            if tasks.isEmpty {
-                print("[jarvis] no tasks")
-                return
-            }
-            print("[jarvis] tasks")
-            for task in tasks {
-                let worker = task.worker?.displayName ?? "unassigned"
-                print("  \(task.id.prefix(8))  \(task.stage.rawValue)  \(task.executionState.rawValue)  \(task.completionState.rawValue)  \(task.writebackState.rawValue)  \(worker)  \(task.objective)")
-            }
+            print(renderTaskList(tasks, label: "tasks", emptyMessage: "no tasks"))
         }
     }
 
@@ -334,6 +647,9 @@ struct PacketCommand: ParsableCommand {
     @Option(name: .long, help: "Candidate limit")
     var limit: Int = 5
 
+    @Flag(name: .long, help: "Copy the generated packet to the macOS clipboard")
+    var copy: Bool = false
+
     @OptionGroup var options: OpenJarvisCLIOptions
 
     func run() throws {
@@ -346,12 +662,17 @@ struct PacketCommand: ParsableCommand {
             scopeHint: try parseScopes(scope)
         )
         print(packet.markdown)
+        if copy {
+            try copyToClipboard(packet.markdown)
+            print("")
+            print("[jarvis] copied packet to clipboard")
+        }
     }
 }
 
 // MARK: - Rendering Helpers
 
-private func render(task: OpenJarvisTask) -> String {
+func render(task: OpenJarvisTask) -> String {
     var lines: [String] = []
     lines.append("[jarvis] task")
     lines.append("  id: \(task.id)")
@@ -392,7 +713,7 @@ private func render(task: OpenJarvisTask) -> String {
     return lines.joined(separator: "\n")
 }
 
-private func renderRetrieval(taskID: String?, query: String, hits: [OpenJarvisRetrievalHit]) -> String {
+func renderRetrieval(taskID: String?, query: String, hits: [OpenJarvisRetrievalHit]) -> String {
     var lines: [String] = []
     lines.append("[jarvis] retrieval")
     if let taskID { lines.append("  task: \(taskID)") }
@@ -411,7 +732,7 @@ private func renderRetrieval(taskID: String?, query: String, hits: [OpenJarvisRe
     return lines.joined(separator: "\n")
 }
 
-private func renderHistory(taskID: String, events: [OpenJarvisTaskEvent], type: String?, limit: Int) -> String {
+func renderHistory(taskID: String, events: [OpenJarvisTaskEvent], type: String?, limit: Int) -> String {
     var lines: [String] = []
     lines.append("[jarvis] task history")
     lines.append("  task: \(taskID)")
@@ -429,7 +750,7 @@ private func renderHistory(taskID: String, events: [OpenJarvisTaskEvent], type: 
     return lines.joined(separator: "\n")
 }
 
-private func renderStatus(snapshot: OpenJarvisStatusSnapshot, vaultStatus: (resolved: Bool, detail: String)) -> String {
+func renderStatus(snapshot: OpenJarvisStatusSnapshot, vaultStatus: (resolved: Bool, detail: String)) -> String {
     var lines: [String] = []
     lines.append("[jarvis] status")
     lines.append("  database: \(snapshot.databaseURL.path)")
@@ -447,7 +768,49 @@ private func renderStatus(snapshot: OpenJarvisStatusSnapshot, vaultStatus: (reso
     return lines.joined(separator: "\n")
 }
 
-private func resolveVaultStatus() -> (resolved: Bool, detail: String) {
+func renderTaskList(_ tasks: [OpenJarvisTaskSummary], label: String, emptyMessage: String) -> String {
+    var lines: [String] = []
+    lines.append("[jarvis] \(label)")
+    guard !tasks.isEmpty else {
+        lines.append("  \(emptyMessage)")
+        return lines.joined(separator: "\n")
+    }
+    for task in tasks {
+        let worker = task.worker?.displayName ?? "unassigned"
+        lines.append("  \(task.id.prefix(8))  \(task.stage.rawValue)  \(task.executionState.rawValue)  \(task.completionState.rawValue)  \(task.writebackState.rawValue)  \(worker)  \(task.objective)")
+    }
+    return lines.joined(separator: "\n")
+}
+
+func printCommonCommands() {
+    print("[jarvis] common commands")
+    print("  jarvis status")
+    print("  jarvis new \"your task\" --context SPPStudio --worker codex --memory coordination")
+    print("  jarvis list")
+    print("  jarvis next")
+    print("  jarvis retrieve --task TASK --scope coordination --limit 5")
+    print("  jarvis packet TASK --role codex --scope coordination --limit 5")
+    print("  jarvis done TASK --note \"validated\"")
+    print("  jarvis task writeback TASK --note \"memory updated\"")
+    print("  jarvis history TASK")
+}
+
+func suggestedCommand(for task: OpenJarvisTaskSummary) -> String {
+    switch task.stage {
+    case .intake, .retrieve:
+        return "jarvis retrieve --task \(task.id.prefix(8)) --scope coordination --limit 5"
+    case .assemble, .assignWorker, .validateScope, .checkpointRequirement:
+        return "jarvis packet \(task.id.prefix(8)) --role \(task.worker?.rawValue ?? "codex") --scope coordination --limit 5"
+    case .executionReady:
+        return "jarvis done \(task.id.prefix(8)) --note \"validated\""
+    case .completed:
+        return "jarvis task writeback \(task.id.prefix(8)) --note \"memory updated\""
+    case .writeback:
+        return "jarvis history \(task.id.prefix(8))"
+    }
+}
+
+func resolveVaultStatus() -> (resolved: Bool, detail: String) {
     do {
         return (true, try OpenJarvisPaths.vaultRoot().path)
     } catch {
@@ -455,7 +818,7 @@ private func resolveVaultStatus() -> (resolved: Bool, detail: String) {
     }
 }
 
-private func parseScopes(_ raw: [String]) throws -> [OpenJarvisRetrievalScope]? {
+func parseScopes(_ raw: [String]) throws -> [OpenJarvisRetrievalScope]? {
     guard !raw.isEmpty else { return nil }
     var scopes: [OpenJarvisRetrievalScope] = []
     for value in raw {
@@ -467,7 +830,7 @@ private func parseScopes(_ raw: [String]) throws -> [OpenJarvisRetrievalScope]? 
     return scopes
 }
 
-private func parseStage(_ raw: String?) throws -> OpenJarvisStage? {
+func parseStage(_ raw: String?) throws -> OpenJarvisStage? {
     guard let raw else { return nil }
     guard let stage = OpenJarvisStage(rawValue: raw.lowercased()) else {
         throw ValidationError("Unknown stage '\(raw)'.")
@@ -475,7 +838,7 @@ private func parseStage(_ raw: String?) throws -> OpenJarvisStage? {
     return stage
 }
 
-private func parseWorker(_ raw: String?) throws -> OpenJarvisWorkerKind? {
+func parseWorker(_ raw: String?) throws -> OpenJarvisWorkerKind? {
     guard let raw else { return nil }
     guard let worker = OpenJarvisWorkerKind(rawValue: raw.lowercased()) else {
         throw ValidationError("Unknown worker '\(raw)'. Use claude or codex.")
@@ -483,7 +846,7 @@ private func parseWorker(_ raw: String?) throws -> OpenJarvisWorkerKind? {
     return worker
 }
 
-private func parsePolicy(_ raw: String, name: String) throws -> Bool {
+func parsePolicy(_ raw: String, name: String) throws -> Bool {
     switch raw.lowercased() {
     case "required":
         return true
@@ -494,15 +857,25 @@ private func parsePolicy(_ raw: String, name: String) throws -> Bool {
     }
 }
 
-private func loadTaskID(store: OpenJarvisStore, token: String) throws -> String {
+func loadTaskID(store: OpenJarvisStore, token: String) throws -> String {
     do {
         return try store.resolveTaskID(token)
     } catch let error as NSError {
+        if error.code == 409 {
+            let prefix = token.uppercased()
+            let matches = try store.listTasks()
+                .filter { $0.id.uppercased().hasPrefix(prefix) }
+                .prefix(8)
+            if !matches.isEmpty {
+                let details = matches.map { "\($0.id.prefix(8)) \($0.stage.rawValue) \($0.objective)" }.joined(separator: "\n  ")
+                throw ValidationError("Task prefix '\(token)' is ambiguous. Matching tasks:\n  \(details)")
+            }
+        }
         throw ValidationError(error.localizedDescription)
     }
 }
 
-private func loadTask(store: OpenJarvisStore, token: String) throws -> OpenJarvisTask {
+func loadTask(store: OpenJarvisStore, token: String) throws -> OpenJarvisTask {
     let taskID = try loadTaskID(store: store, token: token)
     guard let task = try store.fetchTask(id: taskID) else {
         throw ValidationError("Task '\(token)' not found.")
@@ -510,7 +883,7 @@ private func loadTask(store: OpenJarvisStore, token: String) throws -> OpenJarvi
     return task
 }
 
-private func taskSummary(_ task: OpenJarvisTask, label: String) -> String {
+func taskSummary(_ task: OpenJarvisTask, label: String) -> String {
     var lines: [String] = []
     lines.append("[jarvis] task \(label)")
     lines.append("  id: \(task.id)")

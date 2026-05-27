@@ -43,7 +43,10 @@ let package = Package(
                 "OpenJarvisCore",
                 .product(name: "ArgumentParser", package: "swift-argument-parser")
             ],
-            path: "Sources/jarvis"
+            path: "Sources/jarvis",
+            linkerSettings: [
+                .linkedLibrary("edit")
+            ]
         ),
         .executableTarget(
             name: "OpenJarvisChecks",

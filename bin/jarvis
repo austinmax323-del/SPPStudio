@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Daily OpenJarvis CLI wrapper. Keeps the Swift package location hidden.
+
+set -euo pipefail
+
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  SOURCE_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+  TARGET="$(readlink "$SOURCE")"
+  case "$TARGET" in
+    /*) SOURCE="$TARGET" ;;
+    *) SOURCE="$SOURCE_DIR/$TARGET" ;;
+  esac
+done
+
+SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+SPPCTL_DIR="$REPO_DIR/Tools/sppctl"
+
+if [ ! -d "$SPPCTL_DIR" ]; then
+  echo "jarvis wrapper error: missing Swift package at $SPPCTL_DIR" >&2
+  exit 1
+fi
+
+cd "$SPPCTL_DIR"
+BINARY="$SPPCTL_DIR/.build/debug/jarvis"
+
+if [ ! -x "$BINARY" ] || find "$SPPCTL_DIR/Sources/jarvis" "$SPPCTL_DIR/Sources/OpenJarvisCore" "$SPPCTL_DIR/Package.swift" -newer "$BINARY" -print -quit | grep -q .; then
+  swift build --product jarvis >/dev/null
+fi
+
+exec "$BINARY" "$@"
