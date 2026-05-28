@@ -112,7 +112,7 @@ struct OpenJarvisChecksMain {
         let packet = try store.generatePacket(for: task.id, role: .codex, limit: 3, scopeHint: [.architecture])
         try require(packet.role == .codex, "Expected Codex packet role")
         try require(packet.retrievedContext.count == hits.count, "Expected packet to include retrieved hits")
-        try require(packet.markdown.contains("Validation requirements"), "Expected validation section in packet")
+        try require(packet.markdown.contains("## Context"), "Expected context section in packet")
 
         let completed = try store.completeTask(id: task.id, note: "finished")
         try require(completed.stage == .completed, "Expected completion to move stage to completed")

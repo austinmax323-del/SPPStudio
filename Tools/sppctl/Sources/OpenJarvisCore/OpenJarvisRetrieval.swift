@@ -52,10 +52,10 @@ public final class OpenJarvisRetrievalEngine {
         }
         let markdown = all.filter { $0.pathExtension.lowercased() == "md" }
         let scoped = scopes.isEmpty ? markdown : markdown.filter { url in
-            let rel = relativePath(for: url)
+            let rel = relativePath(for: url).lowercased()
             return scopes.contains { scope in
                 scope.pathPrefixes.contains { prefix in
-                    rel.hasPrefix(prefix)
+                    rel.hasPrefix(prefix.lowercased())
                 }
             }
         }
@@ -89,6 +89,10 @@ public final class OpenJarvisRetrievalEngine {
         return filePath
     }
 
+    private static let stopWords: Set<String> = [
+        "a", "and", "current", "for", "in", "of", "on", "review", "the", "with"
+    ]
+
     private func normalizeTerms(_ raw: String) -> [String] {
         let lower = raw.lowercased()
         let regex = try? NSRegularExpression(pattern: #"[a-z0-9]+"#, options: [])
@@ -98,7 +102,7 @@ public final class OpenJarvisRetrievalEngine {
             guard let match, let r = Range(match.range, in: lower) else { return }
             terms.append(String(lower[r]))
         }
-        return terms
+        return terms.filter { !Self.stopWords.contains($0) }
     }
 
     private func firstHeading(in text: String) -> String? {

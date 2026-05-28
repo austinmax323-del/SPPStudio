@@ -133,13 +133,25 @@ public final class OpenJarvisStore {
             throw NSError(domain: "OpenJarvisStore", code: 409, userInfo: [NSLocalizedDescriptionKey: "Cannot generate a packet after task completion."])
         }
         let vaultRoot = try resolveVaultRoot(task: task)
-        let engine = OpenJarvisRetrievalEngine(vaultRoot: vaultRoot)
-        let assembler = OpenJarvisPacketAssembler(retrievalEngine: engine)
-        let packet = try assembler.assemble(task: task, role: role, limit: limit, scopeOverride: scopeHint)
+        let packet: OpenJarvisWorkerPacket
+        if scopeHint == nil, !task.retrievedContext.isEmpty {
+            let effectiveRole = role ?? task.targetWorker ?? .codex
+            packet = OpenJarvisWorkerPacket(
+                taskID: task.id,
+                role: effectiveRole,
+                task: task.interpretedObjective,
+                allowedScope: task.allowedFiles,
+                forbiddenScope: task.forbiddenFiles,
+                retrievedContext: task.retrievedContext
+            )
+        } else {
+            let engine = OpenJarvisRetrievalEngine(vaultRoot: vaultRoot)
+            let assembler = OpenJarvisPacketAssembler(retrievalEngine: engine)
+            packet = try assembler.assemble(task: task, role: role, limit: limit, scopeOverride: scopeHint)
+        }
         try savePacket(taskID: taskID, packet: packet, vaultRoot: vaultRoot.path)
-        for stage in progressionStages(from: task.stage) {
-            let executionState: OpenJarvisExecutionState = stage == .executionReady ? .ready : .pending
-            try advance(taskID: taskID, to: stage, executionState: executionState)
+        if task.stage != .executionReady {
+            try advance(taskID: taskID, to: .executionReady, executionState: .ready)
         }
         try recordEvent(taskID: taskID, type: "task.packet_generated", payload: [
             "role": packet.role.rawValue,
@@ -441,35 +453,16 @@ public final class OpenJarvisStore {
     }
 
     private let allowedTransitions: [OpenJarvisStage: [OpenJarvisStage]] = [
-        .intake: [.retrieve],
-        .retrieve: [.assemble],
-        .assemble: [.assignWorker],
-        .assignWorker: [.validateScope],
-        .validateScope: [.checkpointRequirement],
+        .intake: [.retrieve, .executionReady],
+        .retrieve: [.assemble, .executionReady],
+        .assemble: [.assignWorker, .executionReady],
+        .assignWorker: [.validateScope, .executionReady],
+        .validateScope: [.checkpointRequirement, .executionReady],
         .checkpointRequirement: [.executionReady],
         .executionReady: [.completed],
         .completed: [.writeback],
         .writeback: []
     ]
-
-    private func progressionStages(from stage: OpenJarvisStage) -> [OpenJarvisStage] {
-        switch stage {
-        case .intake:
-            return [.retrieve, .assemble, .assignWorker, .validateScope, .checkpointRequirement, .executionReady]
-        case .retrieve:
-            return [.assemble, .assignWorker, .validateScope, .checkpointRequirement, .executionReady]
-        case .assemble:
-            return [.assignWorker, .validateScope, .checkpointRequirement, .executionReady]
-        case .assignWorker:
-            return [.validateScope, .checkpointRequirement, .executionReady]
-        case .validateScope:
-            return [.checkpointRequirement, .executionReady]
-        case .checkpointRequirement:
-            return [.executionReady]
-        case .executionReady, .completed, .writeback:
-            return []
-        }
-    }
 
     public func listTaskEvents(taskID: String, type: String? = nil, limit: Int = 20) throws -> [OpenJarvisTaskEvent] {
         let sql = """

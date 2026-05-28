@@ -236,9 +236,6 @@ public struct OpenJarvisWorkerPacket: Codable, Hashable {
     public var allowedScope: [String]
     public var forbiddenScope: [String]
     public var retrievedContext: [OpenJarvisRetrievalHit]
-    public var validationRequirements: [String]
-    public var stopConditions: [String]
-    public var writebackInstructions: [String]
 
     public var markdown: String {
         var lines: [String] = []
@@ -246,36 +243,31 @@ public struct OpenJarvisWorkerPacket: Codable, Hashable {
         lines.append("")
         lines.append("Task: \(task)")
         lines.append("Role: \(role.displayName)")
+        lines.append("Task ID: \(taskID.prefix(8))")
         lines.append("")
-        lines.append("Allowed scope:")
-        lines.append(contentsOf: allowedScope.isEmpty ? ["- (not specified)"] : allowedScope.map { "- \($0)" })
-        lines.append("")
-        lines.append("Forbidden scope:")
-        lines.append(contentsOf: forbiddenScope.isEmpty ? ["- (not specified)"] : forbiddenScope.map { "- \($0)" })
-        lines.append("")
-        lines.append("Retrieved context:")
+        lines.append("## Context")
         if retrievedContext.isEmpty {
-            lines.append("- (none)")
+            lines.append("(no context retrieved)")
         } else {
             for hit in retrievedContext {
                 lines.append("- [\(hit.score)] \(hit.title) — \(hit.path)")
-                if !hit.reasons.isEmpty {
-                    lines.append("  - reasons: \(hit.reasons.joined(separator: ", "))")
-                }
                 if !hit.excerpt.isEmpty {
-                    lines.append("  - excerpt: \(hit.excerpt)")
+                    lines.append("  \(hit.excerpt)")
                 }
             }
         }
-        lines.append("")
-        lines.append("Validation requirements:")
-        lines.append(contentsOf: validationRequirements.isEmpty ? ["- (not specified)"] : validationRequirements.map { "- \($0)" })
-        lines.append("")
-        lines.append("Stop conditions:")
-        lines.append(contentsOf: stopConditions.isEmpty ? ["- scope expands", "- validation fails", "- blocked state appears"] : stopConditions.map { "- \($0)" })
-        lines.append("")
-        lines.append("Writeback instructions:")
-        lines.append(contentsOf: writebackInstructions.isEmpty ? ["- update OpenJarvis memory digest", "- record the session handoff", "- keep the result manual-first"] : writebackInstructions.map { "- \($0)" })
+        if !allowedScope.isEmpty || !forbiddenScope.isEmpty {
+            lines.append("")
+            lines.append("## Scope")
+            if !allowedScope.isEmpty {
+                lines.append("Allowed:")
+                lines.append(contentsOf: allowedScope.map { "- \($0)" })
+            }
+            if !forbiddenScope.isEmpty {
+                lines.append("Forbidden:")
+                lines.append(contentsOf: forbiddenScope.map { "- \($0)" })
+            }
+        }
         return lines.joined(separator: "\n")
     }
 }
