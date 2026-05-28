@@ -757,7 +757,9 @@ func renderStatus(snapshot: OpenJarvisStatusSnapshot, vaultStatus: (resolved: Bo
     lines.append("  database exists: \(snapshot.databaseExists ? "yes" : "no")")
     lines.append("  task count: \(snapshot.taskCount.map(String.init) ?? "unavailable")")
     if let latestTask = snapshot.latestTask {
-        lines.append("  latest task: \(latestTask.id.prefix(8)) \(userFacingStage(latestTask.stage)) \(latestTask.objective)")
+        let obj = latestTask.objective
+        let truncated = obj.count > 60 ? String(obj.prefix(57)) + "..." : obj
+        lines.append("  latest task: \(latestTask.id.prefix(8)) \(userFacingStage(latestTask.stage)) \(truncated)")
         lines.append("  latest updated: \(latestTask.updatedAt)")
     } else {
         lines.append("  latest task: none")

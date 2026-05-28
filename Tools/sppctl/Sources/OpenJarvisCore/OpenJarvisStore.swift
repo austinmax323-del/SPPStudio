@@ -181,7 +181,66 @@ public final class OpenJarvisStore {
         guard let task = try fetchTask(id: id) else {
             throw NSError(domain: "OpenJarvisStore", code: 500, userInfo: [NSLocalizedDescriptionKey: "Task \(id) disappeared after writeback"])
         }
+        try recordEvent(taskID: id, type: "task.session_closed", payload: [
+            "objective": task.interpretedObjective,
+            "worker": task.targetWorker?.rawValue ?? "",
+            "status": "archived",
+            "note": note ?? "",
+            "closed_at": task.writtenBackAt ?? now()
+        ])
         return task
+    }
+
+    public func buildRecoveryContext(for taskID: String) throws -> String {
+        guard let task = try fetchTask(id: taskID) else {
+            throw NSError(domain: "OpenJarvisStore", code: 404, userInfo: [NSLocalizedDescriptionKey: "Task '\(taskID)' not found."])
+        }
+        let events = try listTaskEvents(taskID: taskID, limit: 10)
+        var lines: [String] = []
+        lines.append("# OpenJarvis Recovery Context")
+        lines.append("")
+        lines.append("Task: \(task.interpretedObjective)")
+        lines.append("ID: \(task.id.prefix(8))")
+        lines.append("Worker: \(task.targetWorker?.displayName ?? "unassigned")")
+        lines.append("Status: \(task.stage.rawValue)")
+        lines.append("Updated: \(task.updatedAt)")
+        lines.append("")
+        lines.append("## Last Packet")
+        if let packetText = task.packetText, !packetText.isEmpty {
+            lines.append(packetText)
+        } else {
+            lines.append("(no packet generated)")
+        }
+        lines.append("")
+        lines.append("## Recent Events")
+        let recent = Array(events.prefix(5))
+        if recent.isEmpty {
+            lines.append("(no events)")
+        } else {
+            for event in recent {
+                lines.append("- \(event.createdAt) \(event.type)")
+                if let data = event.payloadJSON.data(using: .utf8),
+                   let dict = try? JSONSerialization.jsonObject(with: data) as? [String: String] {
+                    for key in ["note", "query", "objective"] {
+                        if let val = dict[key], !val.isEmpty {
+                            lines.append("  \(key): \(val)")
+                        }
+                    }
+                }
+            }
+        }
+        let closedNote: String? = events.first(where: { $0.type == "task.session_closed" }).flatMap { event in
+            guard let data = event.payloadJSON.data(using: .utf8),
+                  let dict = try? JSONSerialization.jsonObject(with: data) as? [String: String],
+                  let note = dict["note"], !note.isEmpty else { return nil }
+            return note
+        }
+        if let note = closedNote {
+            lines.append("")
+            lines.append("## Writeback Note")
+            lines.append(note)
+        }
+        return lines.joined(separator: "\n")
     }
 
     public func recordEvent(taskID: String?, type: String, payload: [String: String]) throws {

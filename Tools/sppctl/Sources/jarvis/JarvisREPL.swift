@@ -80,6 +80,8 @@ struct OpenJarvisREPL {
             try handleAsk(tokens)
         case "go":
             try handleGo(tokens)
+        case "recover", "rec":
+            try recover(tokens)
         case "retrieve", "r":
             try retrieve(tokens)
         case "packet", "p":
@@ -407,6 +409,30 @@ struct OpenJarvisREPL {
         }
     }
 
+    private mutating func recover(_ tokens: [String]) throws {
+        let parsed = try parseREPLFlags(tokens)
+        let store = try OpenJarvisStore(databaseURL: parsed.databaseURL ?? databaseURL)
+        let taskID: String
+        if let token = parsed.positionals.first {
+            taskID = try loadTaskID(store: store, token: token)
+        } else if let id = currentTaskID {
+            taskID = id
+        } else if let latest = try store.listTasks().first {
+            taskID = latest.id
+        } else {
+            throw ValidationError("No tasks found. Use: go <request>")
+        }
+        printAutoSelectionIfNeeded(parsed: parsed, taskID: taskID)
+        let context = try store.buildRecoveryContext(for: taskID)
+        currentTaskID = taskID
+        print(context)
+        if parsed.hasFlag("copy") {
+            try copyToClipboard(context)
+            print("")
+            printSection("copied recovery context to clipboard")
+        }
+    }
+
     private func renderTaskBrief(_ task: OpenJarvisTask) -> String {
         var lines: [String] = []
         lines.append("[jarvis] task")
@@ -531,7 +557,9 @@ func printStartupDashboard(databaseURL: URL?) throws {
     print("Vault: \(vaultStatus.resolved ? "resolved" : "unresolved")")
     print("Open tasks: \(openTasks.count)")
     if let latestTask = snapshot.latestTask {
-        print("Latest task: \(latestTask.id.prefix(8)) \(userFacingStage(latestTask.stage))")
+        let obj = latestTask.objective
+        let truncated = obj.count > 60 ? String(obj.prefix(57)) + "..." : obj
+        print("Latest task: \(latestTask.id.prefix(8)) \(userFacingStage(latestTask.stage)) \(truncated)")
     } else {
         print("Latest task: none")
     }
@@ -560,12 +588,18 @@ func printNext(databaseURL: URL?) throws {
         return
     }
 
+    let suggested: String
+    if task.stage == .writeback {
+        suggested = "recover \(task.id.prefix(8))"
+    } else {
+        suggested = suggestedCommand(for: task).replacingOccurrences(of: "jarvis ", with: "")
+    }
     printSection("next")
     print("  task: \(task.id.prefix(8))")
     print("  objective: \(task.objective)")
     print("  status: \(userFacingStage(task.stage))")
     print("  worker: \(task.worker?.displayName ?? "unassigned")")
-    print("  suggested: \(suggestedCommand(for: task).replacingOccurrences(of: "jarvis ", with: ""))")
+    print("  suggested: \(suggested)")
 }
 
 func printREPLHelp() {
@@ -575,6 +609,7 @@ func printREPLHelp() {
     print("  go <request>                     create task, generate packet, copy to clipboard")
     print("  ask <request> [--copy]           create task + packet (infers worker/scope)")
     print("  close | c [TASK] --note \"done\"   complete + writeback in one step (default note: closed)")
+    print("  recover | rec [TASK] [--copy]    assemble compact recovery context (read-only)")
     print("  status | s                       show database/vault status")
     print("  list | ls                        list tasks")
     print("  next | n                         show latest open task and suggested command")

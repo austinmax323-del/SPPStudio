@@ -97,12 +97,15 @@ public final class OpenJarvisRetrievalEngine {
         let lower = raw.lowercased()
         let regex = try? NSRegularExpression(pattern: #"[a-z0-9]+"#, options: [])
         let range = NSRange(lower.startIndex..<lower.endIndex, in: lower)
+        var seen = Set<String>()
         var terms: [String] = []
         regex?.enumerateMatches(in: lower, options: [], range: range) { match, _, _ in
             guard let match, let r = Range(match.range, in: lower) else { return }
-            terms.append(String(lower[r]))
+            let term = String(lower[r])
+            guard term.count >= 2, !Self.stopWords.contains(term), seen.insert(term).inserted else { return }
+            terms.append(term)
         }
-        return terms.filter { !Self.stopWords.contains($0) }
+        return terms
     }
 
     private func firstHeading(in text: String) -> String? {
@@ -139,11 +142,26 @@ public final class OpenJarvisRetrievalEngine {
     }
 
     private func excerpt(from text: String, limit: Int = 220) -> String {
-        let body = text
-            .split(separator: "\n")
-            .drop(while: { $0.hasPrefix("#") || $0.trimmingCharacters(in: .whitespaces).isEmpty })
-            .prefix(3)
-            .joined(separator: " ")
+        let allLines = text.components(separatedBy: "\n")
+        var startIndex = 0
+        if allLines.first?.trimmingCharacters(in: .whitespaces) == "---" {
+            for i in 1..<allLines.count {
+                let t = allLines[i].trimmingCharacters(in: .whitespaces)
+                if t == "---" || t == "..." { startIndex = i + 1; break }
+            }
+        }
+        var collected: [String] = []
+        for i in startIndex..<allLines.count {
+            let trimmed = allLines[i].trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { if !collected.isEmpty { break }; continue }
+            if trimmed.hasPrefix("#") { continue }
+            if trimmed.hasPrefix("|") { continue }
+            if trimmed.hasPrefix("---") || trimmed.hasPrefix("***") { continue }
+            if trimmed.hasPrefix("```") { continue }
+            collected.append(trimmed)
+            if collected.count >= 3 { break }
+        }
+        let body = collected.joined(separator: " ")
         let collapsed = body.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
         return String(collapsed.prefix(limit))
     }
@@ -168,7 +186,8 @@ public final class OpenJarvisRetrievalEngine {
             if loweredTitle.contains(term) { score += 6 }
             if tags.contains(where: { $0.contains(term) }) { score += 5 }
             if links.contains(where: { $0.lowercased().contains(term) }) { score += 3 }
-            score += loweredBody.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { $0 == term }.count
+            let bodyCount = loweredBody.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { $0 == term }.count
+            score += min(bodyCount, 3)
         }
 
         if title.contains("Index") || title.contains("Handoff") || title.contains("Log") || title.contains("Map") || title.contains("Packet") || title.contains("Digest") {
