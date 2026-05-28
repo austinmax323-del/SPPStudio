@@ -735,14 +735,18 @@ func renderRetrieval(taskID: String?, query: String, hits: [OpenJarvisRetrievalH
 func renderHistory(taskID: String, events: [OpenJarvisTaskEvent], type: String?, limit: Int) -> String {
     var lines: [String] = []
     lines.append("[jarvis] task history")
-    lines.append("  task: \(taskID)")
+    lines.append("  task: \(taskID.prefix(8))")
     if let type {
         lines.append("  type: \(type)")
     }
-    lines.append("  limit: \(limit)")
     lines.append("  events: \(events.count)")
+    let landmarks: Set<String> = ["task.packet_generated", "task.completed", "task.writeback", "task.session_closed"]
     for event in events {
-        lines.append("  \(event.id). \(event.createdAt) \(event.type)")
+        if landmarks.contains(event.type) {
+            lines.append("")
+        }
+        let age = relativeAge(from: event.createdAt)
+        lines.append("  \(event.id). \(age)  \(humanEventLabel(event.type))")
         if !event.payloadJSON.isEmpty && event.payloadJSON != "{}" {
             lines.append("     payload: \(event.payloadJSON)")
         }
@@ -771,15 +775,20 @@ func renderStatus(snapshot: OpenJarvisStatusSnapshot, vaultStatus: (resolved: Bo
 }
 
 func userFacingStage(_ stage: OpenJarvisStage) -> String {
-    switch stage {
-    case .intake, .retrieve, .assemble, .assignWorker, .validateScope, .checkpointRequirement:
-        return "working"
-    case .executionReady:
-        return "ready"
-    case .completed:
-        return "done"
-    case .writeback:
-        return "archived"
+    return stage.displayLabel
+}
+
+func humanEventLabel(_ type: String) -> String {
+    switch type {
+    case "task.created": return "created"
+    case "task.retrieved": return "context retrieved"
+    case "task.packet_generated": return "packet generated"
+    case "task.completed": return "completed"
+    case "task.writeback": return "writeback"
+    case "task.session_closed": return "session closed"
+    case "task.transition_blocked": return "transition blocked"
+    case "task.packet_blocked": return "packet blocked"
+    default: return type
     }
 }
 

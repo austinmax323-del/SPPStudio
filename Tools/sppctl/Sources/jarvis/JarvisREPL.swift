@@ -412,6 +412,18 @@ struct OpenJarvisREPL {
     private mutating func recover(_ tokens: [String]) throws {
         let parsed = try parseREPLFlags(tokens)
         let store = try OpenJarvisStore(databaseURL: parsed.databaseURL ?? databaseURL)
+
+        if parsed.hasFlag("session") {
+            let context = try store.buildSessionRecoveryContext()
+            print(context)
+            if parsed.hasFlag("copy") {
+                try copyToClipboard(context)
+                print("")
+                printSection("copied session recovery to clipboard")
+            }
+            return
+        }
+
         let taskID: String
         if let token = parsed.positionals.first {
             taskID = try loadTaskID(store: store, token: token)
@@ -423,7 +435,13 @@ struct OpenJarvisREPL {
             throw ValidationError("No tasks found. Use: go <request>")
         }
         printAutoSelectionIfNeeded(parsed: parsed, taskID: taskID)
-        let context = try store.buildRecoveryContext(for: taskID)
+
+        let context: String
+        if parsed.hasFlag("brief") {
+            context = try store.buildBriefRecoveryContext(for: taskID)
+        } else {
+            context = try store.buildRecoveryContext(for: taskID)
+        }
         currentTaskID = taskID
         print(context)
         if parsed.hasFlag("copy") {
@@ -543,11 +561,12 @@ struct REPLParsedArguments {
 func printStartupDashboard(databaseURL: URL?) throws {
     let snapshot = try OpenJarvisStatusReader.read(databaseURL: databaseURL)
     let vaultStatus = resolveVaultStatus()
-    let openTasks: [OpenJarvisTaskSummary]
+    var openCount = 0
+    var recentTasks: [OpenJarvisTaskSummary] = []
     if snapshot.databaseExists {
-        openTasks = try OpenJarvisStore(databaseURL: databaseURL).listTasks().filter { $0.completionState == .open }
-    } else {
-        openTasks = []
+        let allTasks = try OpenJarvisStore(databaseURL: databaseURL).listTasks()
+        openCount = allTasks.filter { $0.completionState == .open }.count
+        recentTasks = Array(allTasks.prefix(3))
     }
 
     print("OpenJarvis manual-first mode enabled")
@@ -555,13 +574,16 @@ func printStartupDashboard(databaseURL: URL?) throws {
     print("")
     print("Database: \(snapshot.databaseExists ? "connected" : "not created")")
     print("Vault: \(vaultStatus.resolved ? "resolved" : "unresolved")")
-    print("Open tasks: \(openTasks.count)")
-    if let latestTask = snapshot.latestTask {
-        let obj = latestTask.objective
-        let truncated = obj.count > 60 ? String(obj.prefix(57)) + "..." : obj
-        print("Latest task: \(latestTask.id.prefix(8)) \(userFacingStage(latestTask.stage)) \(truncated)")
+    print("Open tasks: \(openCount)")
+    if recentTasks.isEmpty {
+        print("Recent tasks: none")
     } else {
-        print("Latest task: none")
+        print("Recent tasks:")
+        for task in recentTasks {
+            let age = relativeAge(from: task.updatedAt)
+            let obj = task.objective.count > 60 ? String(task.objective.prefix(57)) + "..." : task.objective
+            print("  \(task.id.prefix(8))  \(task.stage.displayLabel)  \(age)  \(obj)")
+        }
     }
     print("")
     print("Type 'help' for commands.")
@@ -584,7 +606,7 @@ func printNext(databaseURL: URL?) throws {
     guard let task = try store.listTasks().first(where: { $0.completionState == .open }) else {
         printSection("next")
         print("  no open tasks")
-        print("  suggested: go <your request>")
+        print("  suggested: go <your request>  or  recover --session")
         return
     }
 
@@ -609,7 +631,9 @@ func printREPLHelp() {
     print("  go <request>                     create task, generate packet, copy to clipboard")
     print("  ask <request> [--copy]           create task + packet (infers worker/scope)")
     print("  close | c [TASK] --note \"done\"   complete + writeback in one step (default note: closed)")
-    print("  recover | rec [TASK] [--copy]    assemble compact recovery context (read-only)")
+    print("  recover | rec [TASK] [--copy]    assemble recovery context (read-only)")
+    print("  recover --session [--copy]       recent session overview across tasks")
+    print("  recover --brief [TASK] [--copy]  compact per-task brief (no packet body)")
     print("  status | s                       show database/vault status")
     print("  list | ls                        list tasks")
     print("  next | n                         show latest open task and suggested command")
@@ -635,7 +659,8 @@ func parseREPLFlags(_ tokens: [String]) throws -> REPLParsedArguments {
         let token = tokens[index]
         if token.hasPrefix("--") {
             let key = String(token.dropFirst(2))
-            if key == "copy" {
+            let boolFlags: Set<String> = ["copy", "session", "brief"]
+            if boolFlags.contains(key) {
                 parsed.flags.insert(key)
                 index += 1
             } else {

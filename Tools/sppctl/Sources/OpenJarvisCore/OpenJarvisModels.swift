@@ -290,3 +290,30 @@ extension ISO8601DateFormatter {
         return formatter
     }()
 }
+
+extension OpenJarvisStage {
+    public var displayLabel: String {
+        switch self {
+        case .intake, .retrieve, .assemble, .assignWorker, .validateScope, .checkpointRequirement:
+            return "working"
+        case .executionReady:
+            return "ready"
+        case .completed:
+            return "done"
+        case .writeback:
+            return "archived"
+        }
+    }
+}
+
+public func relativeAge(from isoString: String) -> String {
+    guard let date = ISO8601DateFormatter.openJarvis.date(from: isoString) else { return "" }
+    let seconds = Int(max(0, Date().timeIntervalSince(date)))
+    if seconds < 90 { return "\(seconds)s ago" }
+    let minutes = seconds / 60
+    if minutes < 90 { return "\(minutes)m ago" }
+    let hours = minutes / 60
+    if hours < 36 { return "\(hours)h ago" }
+    let days = hours / 24
+    return "\(days)d ago"
+}
