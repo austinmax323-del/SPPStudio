@@ -76,10 +76,16 @@ struct OpenJarvisREPL {
             try printNext(databaseURL: databaseURL)
         case "new":
             try createTask(tokens)
+        case "auto":
+            try handleAuto(tokens)
         case "ask":
             try handleAsk(tokens)
         case "go":
             try handleGo(tokens)
+        case "resume", "res":
+            try handleResume(tokens)
+        case "continue", "cont":
+            try handleContinue(tokens)
         case "recover", "rec":
             try recover(tokens)
         case "retrieve", "r":
@@ -239,6 +245,142 @@ struct OpenJarvisREPL {
         print("  scope: \(scopeLabel)")
         print("  context: \(packet.retrievedContext.count) hits")
         print("  packet copied to clipboard")
+    }
+
+    private mutating func handleAuto(_ tokens: [String]) throws {
+        let request = tokens.joined(separator: " ")
+        guard !request.isEmpty else {
+            printSection("auto")
+            print("  Usage: auto <request>")
+            print("  Example: auto review current Jarvis automation boundary for codex")
+            print("  Full pipeline: create task → retrieve context → generate packet → copy to clipboard.")
+            return
+        }
+        let workerStr = inferWorker(from: request) ?? "codex"
+        let scopes = inferOpenJarvisScopes(from: request)
+        let neededMemory = scopes.isEmpty ? ["coordination"] : scopes.map(\.rawValue)
+        let objective = request.prefix(1).uppercased() + request.dropFirst()
+        let store = try OpenJarvisStore(databaseURL: databaseURL)
+
+        printSection("auto  1/4  creating task")
+        let task = try store.createTask(
+            from: OpenJarvisTaskDraft(
+                rawRequest: request,
+                interpretedObjective: objective,
+                projectContext: nil,
+                trustZone: "safe",
+                riskLevel: "medium",
+                allowedFiles: [],
+                forbiddenFiles: [],
+                targetWorker: try parseWorker(workerStr),
+                neededMemory: neededMemory,
+                checkpointRequired: true,
+                validationRequired: true,
+                memoryWritebackRequired: true,
+                nextAction: nil,
+                vaultRoot: nil
+            )
+        )
+        currentTaskID = task.id
+        print("  task: \(task.id.prefix(8))")
+
+        printSection("auto  2/4  retrieving context")
+        var queryParts: [String] = [objective]
+        let normalizedObjective = objective.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedRequest = request.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalizedRequest != normalizedObjective { queryParts.append(request) }
+        queryParts.append(contentsOf: neededMemory)
+        let retrievalQuery = queryParts.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.joined(separator: " ")
+        let hits = try store.retrieveContext(for: task.id, query: retrievalQuery, scopeHint: scopes.isEmpty ? nil : scopes, limit: 8)
+        print("  hits: \(hits.count)")
+
+        printSection("auto  3/4  generating packet")
+        let packet = try store.generatePacket(for: task.id, role: try parseWorker(workerStr), limit: 5, scopeHint: nil)
+        print("  context: \(packet.retrievedContext.count) hits")
+
+        printSection("auto  4/4  copying to clipboard")
+        try copyToClipboard(packet.markdown)
+        try store.recordEvent(taskID: task.id, type: "task.autopilot_launch", payload: [
+            "worker": workerStr,
+            "hit_count": "\(packet.retrievedContext.count)"
+        ])
+        print("  done")
+        print("")
+        printSection("ready")
+        print("  task: \(task.id.prefix(8))")
+        print("  worker: \(OpenJarvisWorkerKind(rawValue: workerStr)?.displayName ?? workerStr)")
+        print("  context hits: \(packet.retrievedContext.count)")
+        print("  packet copied to clipboard")
+        print("")
+        print("  next: paste into \(OpenJarvisWorkerKind(rawValue: workerStr)?.displayName ?? workerStr)")
+        print("  then: close \(task.id.prefix(8)) --note \"done\"")
+    }
+
+    private mutating func handleResume(_ tokens: [String]) throws {
+        let parsed = try parseREPLFlags(tokens)
+        let store = try OpenJarvisStore(databaseURL: parsed.databaseURL ?? databaseURL)
+        let allTasks = try store.listTasks()
+        guard let summary = allTasks.first(where: { $0.completionState == .open }) ?? allTasks.first else {
+            printSection("resume")
+            print("  no tasks found")
+            print("  suggested: auto <your request>")
+            return
+        }
+        currentTaskID = summary.id
+        let context = try store.buildRecoveryContext(for: summary.id)
+        print(context)
+        try copyToClipboard(context)
+        print("")
+        printSection("context copied to clipboard")
+        print("  task: \(summary.id.prefix(8))")
+        print("  status: \(summary.stage.displayLabel)")
+        print("  worker: \(summary.worker?.displayName ?? "unassigned")")
+        print("  next: paste into \(summary.worker?.displayName ?? "your worker")")
+    }
+
+    private mutating func handleContinue(_ tokens: [String]) throws {
+        let parsed = try parseREPLFlags(tokens)
+        let store = try OpenJarvisStore(databaseURL: parsed.databaseURL ?? databaseURL)
+        let taskID: String
+        if let token = parsed.positionals.first {
+            taskID = try loadTaskID(store: store, token: token)
+        } else if let id = currentTaskID {
+            taskID = id
+        } else if let latest = try store.listTasks().first(where: { $0.completionState == .open }) {
+            taskID = latest.id
+        } else {
+            printSection("continue")
+            print("  no open tasks")
+            print("  suggested: auto <your request>  or  recover --session")
+            return
+        }
+        guard let task = try store.fetchTask(id: taskID) else {
+            throw ValidationError("Task '\(taskID)' not found.")
+        }
+        currentTaskID = taskID
+        let isTerminal = task.stage == .completed || task.stage == .writeback
+        let content: String
+        let mode: String
+        if isTerminal || task.packetText != nil && task.stage == .executionReady {
+            content = try store.buildBriefRecoveryContext(for: taskID)
+            mode = "brief recovery"
+        } else {
+            let packet = try store.generatePacket(for: taskID, role: task.targetWorker, limit: 5, scopeHint: nil)
+            content = packet.markdown
+            mode = "packet"
+        }
+        print(content)
+        try copyToClipboard(content)
+        print("")
+        printSection("copied \(mode) to clipboard")
+        print("  task: \(taskID.prefix(8))")
+        print("  status: \(task.stage.displayLabel)")
+        print("  worker: \(task.targetWorker?.displayName ?? "unassigned")")
+        if mode == "packet" {
+            print("  next: paste packet into \(task.targetWorker?.displayName ?? "your worker")")
+        } else {
+            print("  next: share context with \(task.targetWorker?.displayName ?? "your worker")")
+        }
     }
 
     private func lifecycleGuidance(for error: Error) -> String? {
@@ -626,8 +768,11 @@ func printNext(databaseURL: URL?) throws {
 
 func printREPLHelp() {
     printSection("commands")
-    print("  Daily flow: go <request>  →  paste into Codex/Claude  →  close --note \"done\"  →  h  →  q")
+    print("  Daily flow: auto <request>  →  paste into Codex/Claude  →  close --note \"done\"  →  h  →  q")
     print("")
+    print("  auto <request>                   create, retrieve, packet, copy — full autopilot pipeline")
+    print("  resume                           recover most recent open task context, auto-copy")
+    print("  continue [TASK]                  smart re-enter: regenerate packet or brief recovery, auto-copy")
     print("  go <request>                     create task, generate packet, copy to clipboard")
     print("  ask <request> [--copy]           create task + packet (infers worker/scope)")
     print("  close | c [TASK] --note \"done\"   complete + writeback in one step (default note: closed)")

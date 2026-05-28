@@ -202,8 +202,8 @@ public final class OpenJarvisStore {
         lines.append("Task: \(task.interpretedObjective)")
         lines.append("ID: \(task.id.prefix(8))")
         lines.append("Worker: \(task.targetWorker?.displayName ?? "unassigned")")
-        lines.append("Status: \(task.stage.rawValue)")
-        lines.append("Updated: \(task.updatedAt)")
+        lines.append("Status: \(task.stage.displayLabel)")
+        lines.append("Updated: \(relativeAge(from: task.updatedAt))")
         lines.append("")
         lines.append("## Last Packet")
         if let packetText = task.packetText, !packetText.isEmpty {
@@ -218,7 +218,7 @@ public final class OpenJarvisStore {
             lines.append("(no events)")
         } else {
             for event in recent {
-                lines.append("- \(event.createdAt) \(event.type)")
+                lines.append("- \(relativeAge(from: event.createdAt))  \(eventLabel(event.type))")
                 if let data = event.payloadJSON.data(using: .utf8),
                    let dict = try? JSONSerialization.jsonObject(with: data) as? [String: String] {
                     for key in ["note", "query", "objective"] {
