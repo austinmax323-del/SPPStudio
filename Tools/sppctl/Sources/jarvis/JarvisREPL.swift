@@ -39,7 +39,10 @@ struct OpenJarvisREPL {
                 }
             } catch {
                 printSection("error")
-                print("  \(error)")
+                print("  \(error.localizedDescription)")
+                if let hint = lifecycleGuidance(for: error) {
+                    print("  \(hint)")
+                }
             }
         }
     }
@@ -75,10 +78,14 @@ struct OpenJarvisREPL {
             try createTask(tokens)
         case "ask":
             try handleAsk(tokens)
+        case "go":
+            try handleGo(tokens)
         case "retrieve", "r":
             try retrieve(tokens)
         case "packet", "p":
             try packet(tokens)
+        case "close", "c":
+            try closeTask(tokens)
         case "done", "d":
             try complete(tokens)
         case "history", "h":
@@ -127,28 +134,22 @@ struct OpenJarvisREPL {
         return nil
     }
 
-    private func inferMemoryScope(from text: String) -> String {
-        let lower = text.lowercased()
-        if lower.contains("architecture") || lower.contains("topology") || lower.contains("design") { return "architecture" }
-        if lower.contains("runtime") || lower.contains("bug") || lower.contains("regression") || lower.contains("error") { return "runtime" }
-        if lower.contains("prompt") || lower.contains("agent") || lower.contains("coordination") ||
-           lower.contains("codex") || lower.contains("claude") || lower.contains("jarvis") { return "coordination" }
-        if lower.contains("validation") || lower.contains("test") || lower.contains("build") || lower.contains("proof") { return "validation" }
-        if lower.contains("session") || lower.contains("handoff") || lower.contains("recovery") { return "continuity" }
-        return "coordination"
-    }
-
     private mutating func handleAsk(_ tokens: [String]) throws {
-        let request = tokens.joined(separator: " ")
+        let copyFlag = tokens.contains("--copy")
+        let requestTokens = tokens.filter { $0 != "--copy" }
+        let request = requestTokens.joined(separator: " ")
         guard !request.isEmpty else {
             printSection("ask")
-            print("  Usage: ask <your request>")
-            print("  Example: ask review current OpenJarvis UX and prepare a packet for codex")
+            print("  Usage: ask <request>  [--copy]")
+            print("  Example: ask review current OpenJarvis UX for codex")
             print("  Tip: plain 3+ word input shows a suggested task without creating it.")
+            print("  Tip: go <request>  creates task, generates packet, and copies in one step.")
             return
         }
         let workerStr = inferWorker(from: request) ?? "codex"
-        let scope = inferMemoryScope(from: request)
+        let scopes = inferOpenJarvisScopes(from: request)
+        let neededMemory = scopes.isEmpty ? ["coordination"] : scopes.map(\.rawValue)
+        let scopeLabel = scopes.first?.rawValue ?? "coordination"
         let objective = request.prefix(1).uppercased() + request.dropFirst()
         let store = try OpenJarvisStore(databaseURL: databaseURL)
         let task = try store.createTask(
@@ -161,7 +162,7 @@ struct OpenJarvisREPL {
                 allowedFiles: [],
                 forbiddenFiles: [],
                 targetWorker: try parseWorker(workerStr),
-                neededMemory: [scope],
+                neededMemory: neededMemory,
                 checkpointRequired: true,
                 validationRequired: true,
                 memoryWritebackRequired: true,
@@ -170,25 +171,100 @@ struct OpenJarvisREPL {
             )
         )
         currentTaskID = task.id
-        printSection("task created")
+        let packet = try store.generatePacket(
+            for: task.id,
+            role: try parseWorker(workerStr),
+            limit: 5,
+            scopeHint: scopes.isEmpty ? nil : scopes
+        )
+        printSection("task ready")
         print("  task: \(task.id.prefix(8))")
         print("  worker: \(workerStr)")
-        print("  scope: \(scope)")
-        print("  suggested: r")
-        print("  suggested: p --copy")
+        print("  scope: \(scopeLabel)")
+        print("  context: \(packet.retrievedContext.count) hits")
+        if copyFlag {
+            try copyToClipboard(packet.markdown)
+            print("  packet copied to clipboard")
+        } else {
+            print("  suggested: p --copy")
+        }
+    }
+
+    private mutating func handleGo(_ tokens: [String]) throws {
+        let request = tokens.joined(separator: " ")
+        guard !request.isEmpty else {
+            printSection("go")
+            print("  Usage: go <request>")
+            print("  Example: go review retrieval architecture for claude")
+            print("  Creates task, generates packet, and copies to clipboard.")
+            return
+        }
+        let workerStr = inferWorker(from: request) ?? "codex"
+        let scopes = inferOpenJarvisScopes(from: request)
+        let neededMemory = scopes.isEmpty ? ["coordination"] : scopes.map(\.rawValue)
+        let scopeLabel = scopes.first?.rawValue ?? "coordination"
+        let objective = request.prefix(1).uppercased() + request.dropFirst()
+        let store = try OpenJarvisStore(databaseURL: databaseURL)
+        let task = try store.createTask(
+            from: OpenJarvisTaskDraft(
+                rawRequest: request,
+                interpretedObjective: objective,
+                projectContext: nil,
+                trustZone: "safe",
+                riskLevel: "medium",
+                allowedFiles: [],
+                forbiddenFiles: [],
+                targetWorker: try parseWorker(workerStr),
+                neededMemory: neededMemory,
+                checkpointRequired: true,
+                validationRequired: true,
+                memoryWritebackRequired: true,
+                nextAction: nil,
+                vaultRoot: nil
+            )
+        )
+        currentTaskID = task.id
+        let packet = try store.generatePacket(
+            for: task.id,
+            role: try parseWorker(workerStr),
+            limit: 5,
+            scopeHint: scopes.isEmpty ? nil : scopes
+        )
+        try copyToClipboard(packet.markdown)
+        printSection("task ready")
+        print("  task: \(task.id.prefix(8))")
+        print("  worker: \(workerStr)")
+        print("  scope: \(scopeLabel)")
+        print("  context: \(packet.retrievedContext.count) hits")
+        print("  packet copied to clipboard")
+    }
+
+    private func lifecycleGuidance(for error: Error) -> String? {
+        let msg = error.localizedDescription
+        guard msg.contains("Invalid transition from") else { return nil }
+        let preReady = ["intake", "retrieve", "assemble", "assign_worker", "validate_scope", "checkpoint_requirement"]
+        for stage in preReady where msg.contains("from \(stage)") {
+            return "hint: p --copy"
+        }
+        if msg.contains("from execution_ready") { return "hint: close --note \"done\"" }
+        if msg.contains("from completed") { return "hint: w --note \"memory updated\"" }
+        if msg.contains("from writeback") { return "hint: task is archived — use: new or go" }
+        return nil
     }
 
     private func handleUnknownInput(command: String, fullLine: String) {
         let wordCount = fullLine.split(separator: " ").count
         if wordCount >= 3 {
             let workerStr = inferWorker(from: fullLine) ?? "codex"
-            let scope = inferMemoryScope(from: fullLine)
+            let scopes = inferOpenJarvisScopes(from: fullLine)
+            let scopeStr = scopes.first?.rawValue ?? "coordination"
             let objective = fullLine.prefix(1).uppercased() + fullLine.dropFirst()
             printSection("interpreted request")
             print("  Create task: \(objective)")
             print("  Suggested worker: \(workerStr)")
-            print("  Suggested scope: \(scope)")
-            print("  Run: new \"\(objective)\" --worker \(workerStr) --memory \(scope)")
+            print("  Suggested scope: \(scopeStr)")
+            print("  Run: go \(fullLine)")
+            print("  Or:  new \"\(objective)\" --worker \(workerStr) --memory \(scopeStr)")
         } else {
             print("Unknown command: \(command). Try: help")
         }
@@ -226,7 +302,13 @@ struct OpenJarvisREPL {
             )
         )
         currentTaskID = task.id
-        print(taskSummary(task, label: "created"))
+        let workerLabel = task.targetWorker?.rawValue ?? "unassigned"
+        let scopeLabel = task.neededMemory.first ?? "none"
+        printSection("task created")
+        print("  task: \(task.id.prefix(8))")
+        print("  worker: \(workerLabel)")
+        print("  scope: \(scopeLabel)")
+        print("  suggested: p --copy")
     }
 
     private mutating func retrieve(_ tokens: [String]) throws {
@@ -298,14 +380,38 @@ struct OpenJarvisREPL {
         print(renderTaskBrief(task))
     }
 
+    private mutating func closeTask(_ tokens: [String]) throws {
+        let parsed = try parseREPLFlags(tokens)
+        let store = try OpenJarvisStore(databaseURL: parsed.databaseURL ?? databaseURL)
+        let taskID = try selectedTaskID(store: store, parsed: parsed, action: "close")
+        printAutoSelectionIfNeeded(parsed: parsed, taskID: taskID)
+        let note = parsed.value("note") ?? "closed"
+        guard let task = try store.fetchTask(id: taskID) else {
+            throw ValidationError("Task '\(taskID)' not found.")
+        }
+        switch task.stage {
+        case .writeback:
+            printSection("task")
+            print("  id: \(taskID.prefix(8))")
+            print("  status: archived")
+            print("  already archived")
+        case .completed:
+            let final = try store.writebackTask(id: taskID, note: note)
+            currentTaskID = final.id
+            print(renderTaskBrief(final))
+        default:
+            _ = try store.completeTask(id: taskID, note: note)
+            let final = try store.writebackTask(id: taskID, note: note)
+            currentTaskID = final.id
+            print(renderTaskBrief(final))
+        }
+    }
+
     private func renderTaskBrief(_ task: OpenJarvisTask) -> String {
         var lines: [String] = []
         lines.append("[jarvis] task")
         lines.append("  id: \(task.id.prefix(8))")
-        lines.append("  objective: \(task.interpretedObjective)")
-        lines.append("  stage: \(task.stage.rawValue)")
-        lines.append("  completion: \(task.completionState.rawValue)")
-        lines.append("  writeback: \(task.writebackState.rawValue)")
+        lines.append("  status: \(userFacingStage(task.stage))")
         lines.append("  worker: \(task.targetWorker?.displayName ?? "unassigned")")
         return lines.joined(separator: "\n")
     }
@@ -361,7 +467,7 @@ struct OpenJarvisREPL {
         if let latestOpen = try store.listTasks().first(where: { $0.completionState == .open }) {
             return latestOpen.id
         }
-        throw ValidationError("No open task. Run: new \"your task\"")
+        throw ValidationError("No open task. Use: go <request>")
     }
 
     private func printAutoSelectionIfNeeded(parsed: REPLParsedArguments, taskID: String) {
@@ -425,7 +531,7 @@ func printStartupDashboard(databaseURL: URL?) throws {
     print("Vault: \(vaultStatus.resolved ? "resolved" : "unresolved")")
     print("Open tasks: \(openTasks.count)")
     if let latestTask = snapshot.latestTask {
-        print("Latest task: \(latestTask.id.prefix(8)) \(latestTask.stage.rawValue)")
+        print("Latest task: \(latestTask.id.prefix(8)) \(userFacingStage(latestTask.stage))")
     } else {
         print("Latest task: none")
     }
@@ -450,37 +556,40 @@ func printNext(databaseURL: URL?) throws {
     guard let task = try store.listTasks().first(where: { $0.completionState == .open }) else {
         printSection("next")
         print("  no open tasks")
-        print("  suggested: new \"your task\"")
+        print("  suggested: go <your request>")
         return
     }
 
     printSection("next")
     print("  task: \(task.id.prefix(8))")
     print("  objective: \(task.objective)")
-    print("  stage: \(task.stage.rawValue)")
+    print("  status: \(userFacingStage(task.stage))")
     print("  worker: \(task.worker?.displayName ?? "unassigned")")
-    print("  updated: \(task.updatedAt)")
     print("  suggested: \(suggestedCommand(for: task).replacingOccurrences(of: "jarvis ", with: ""))")
 }
 
 func printREPLHelp() {
     printSection("commands")
-    print("  status | s                     show database/vault status")
-    print("  list | ls                      list tasks")
-    print("  next | n                       show latest open task and suggested command")
-    print("  new \"task\"                    create a manual task")
-    print("  ask <request>                  create task from natural language (infers worker/scope)")
-    print("  show [TASK]                    inspect current/latest task")
-    print("  retrieve | r [TASK]            retrieve context for current/latest task")
-    print("  packet | p [TASK] [--copy]     generate worker packet, optionally copy")
-    print("  done | d [TASK] --note \"done\"  mark current/latest task complete")
-    print("  writeback | rb | w [TASK]      mark writeback complete")
-    print("  history | h [TASK]             show task audit events")
-    print("  open TASK                      open first related note/file")
-    print("  clear                          clear the screen")
-    print("  exit | q                       leave the shell")
+    print("  Daily flow: go <request>  →  paste into Codex/Claude  →  close --note \"done\"  →  h  →  q")
     print("")
-    print("Natural language: type 3+ words to get a suggested new command (no task created).")
+    print("  go <request>                     create task, generate packet, copy to clipboard")
+    print("  ask <request> [--copy]           create task + packet (infers worker/scope)")
+    print("  close | c [TASK] --note \"done\"   complete + writeback in one step (default note: closed)")
+    print("  status | s                       show database/vault status")
+    print("  list | ls                        list tasks")
+    print("  next | n                         show latest open task and suggested command")
+    print("  new \"task\"                      create a manual task with explicit flags")
+    print("  show [TASK]                      inspect current/latest task")
+    print("  retrieve | r [TASK]              retrieve context for a task")
+    print("  packet | p [TASK] [--copy]       generate worker packet, optionally copy")
+    print("  done | d [TASK] --note \"done\"    mark current/latest task complete")
+    print("  writeback | rb | w [TASK]        mark writeback complete")
+    print("  history | h [TASK]               show task audit events")
+    print("  open TASK                        open first related note/file")
+    print("  clear                            clear the screen")
+    print("  exit | q                         leave the shell")
+    print("")
+    print("Natural language: type 3+ words to get a suggested go command (no task created).")
     print("Scopes: architecture, runtime, coordination, validation, continuity, memory_digests, active_tasks, failures, decisions")
 }
 

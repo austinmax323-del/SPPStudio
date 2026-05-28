@@ -757,7 +757,7 @@ func renderStatus(snapshot: OpenJarvisStatusSnapshot, vaultStatus: (resolved: Bo
     lines.append("  database exists: \(snapshot.databaseExists ? "yes" : "no")")
     lines.append("  task count: \(snapshot.taskCount.map(String.init) ?? "unavailable")")
     if let latestTask = snapshot.latestTask {
-        lines.append("  latest task: \(latestTask.id.prefix(8)) \(latestTask.stage.rawValue) \(latestTask.objective)")
+        lines.append("  latest task: \(latestTask.id.prefix(8)) \(userFacingStage(latestTask.stage)) \(latestTask.objective)")
         lines.append("  latest updated: \(latestTask.updatedAt)")
     } else {
         lines.append("  latest task: none")
@@ -766,6 +766,19 @@ func renderStatus(snapshot: OpenJarvisStatusSnapshot, vaultStatus: (resolved: Bo
     lines.append("  vault detail: \(vaultStatus.detail)")
     lines.append("  mode: manual-first, read-only status")
     return lines.joined(separator: "\n")
+}
+
+func userFacingStage(_ stage: OpenJarvisStage) -> String {
+    switch stage {
+    case .intake, .retrieve, .assemble, .assignWorker, .validateScope, .checkpointRequirement:
+        return "working"
+    case .executionReady:
+        return "ready"
+    case .completed:
+        return "done"
+    case .writeback:
+        return "archived"
+    }
 }
 
 func renderTaskList(_ tasks: [OpenJarvisTaskSummary], label: String, emptyMessage: String) -> String {
@@ -777,7 +790,7 @@ func renderTaskList(_ tasks: [OpenJarvisTaskSummary], label: String, emptyMessag
     }
     for task in tasks {
         let worker = task.worker?.displayName ?? "unassigned"
-        lines.append("  \(task.id.prefix(8))  \(task.stage.rawValue)  \(task.executionState.rawValue)  \(task.completionState.rawValue)  \(task.writebackState.rawValue)  \(worker)  \(task.objective)")
+        lines.append("  \(task.id.prefix(8))  \(userFacingStage(task.stage))  \(worker)  \(task.objective)")
     }
     return lines.joined(separator: "\n")
 }
@@ -797,16 +810,14 @@ func printCommonCommands() {
 
 func suggestedCommand(for task: OpenJarvisTaskSummary) -> String {
     switch task.stage {
-    case .intake, .retrieve:
-        return "jarvis retrieve --task \(task.id.prefix(8)) --scope coordination --limit 5"
-    case .assemble, .assignWorker, .validateScope, .checkpointRequirement:
-        return "jarvis packet \(task.id.prefix(8)) --role \(task.worker?.rawValue ?? "codex") --scope coordination --limit 5"
+    case .intake, .retrieve, .assemble, .assignWorker, .validateScope, .checkpointRequirement:
+        return "jarvis p \(task.id.prefix(8)) --copy"
     case .executionReady:
-        return "jarvis done \(task.id.prefix(8)) --note \"validated\""
+        return "jarvis d \(task.id.prefix(8)) --note \"done\""
     case .completed:
-        return "jarvis task writeback \(task.id.prefix(8)) --note \"memory updated\""
+        return "jarvis w \(task.id.prefix(8)) --note \"memory updated\""
     case .writeback:
-        return "jarvis history \(task.id.prefix(8))"
+        return "jarvis h \(task.id.prefix(8))"
     }
 }
 
