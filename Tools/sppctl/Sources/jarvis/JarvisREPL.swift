@@ -86,6 +86,8 @@ struct OpenJarvisREPL {
             try handleResume(tokens)
         case "continue", "cont":
             try handleContinue(tokens)
+        case "send":
+            try handleSend(tokens)
         case "recover", "rec":
             try recover(tokens)
         case "retrieve", "r":
@@ -327,11 +329,12 @@ struct OpenJarvisREPL {
             return
         }
         currentTaskID = summary.id
-        let context = try store.buildRecoveryContext(for: summary.id)
-        print(context)
-        try copyToClipboard(context)
+        let brief = try store.buildBriefRecoveryContext(for: summary.id)
+        let full = try store.buildRecoveryContext(for: summary.id)
+        print(brief)
+        try copyToClipboard(full)
         print("")
-        printSection("context copied to clipboard")
+        printSection("full recovery copied to clipboard")
         print("  task: \(summary.id.prefix(8))")
         print("  status: \(summary.stage.displayLabel)")
         print("  worker: \(summary.worker?.displayName ?? "unassigned")")
@@ -381,6 +384,211 @@ struct OpenJarvisREPL {
         } else {
             print("  next: share context with \(task.targetWorker?.displayName ?? "your worker")")
         }
+    }
+
+    private mutating func handleSend(_ tokens: [String]) throws {
+        let parsed = try parseREPLFlags(tokens)
+        guard !tokens.isEmpty else {
+            printSection("send")
+            print("  Usage: send claude [TASK]  |  send codex [TASK]  |  send [TASK] --worker claude|codex")
+            print("  Flags: --dry-run  --yes")
+            print("  Example: send claude --dry-run")
+            return
+        }
+        let store = try OpenJarvisStore(databaseURL: parsed.databaseURL ?? databaseURL)
+
+        // First positional may be worker name or task token
+        let rawPositionals = parsed.positionals
+        var resolvedWorkerStr: String? = parsed.value("worker")
+        let taskToken: String?
+        if let first = rawPositionals.first, ["claude", "codex"].contains(first.lowercased()) {
+            resolvedWorkerStr = resolvedWorkerStr ?? first.lowercased()
+            taskToken = rawPositionals.dropFirst().first
+        } else {
+            taskToken = rawPositionals.first
+        }
+
+        // Resolve task
+        let taskID: String
+        if let token = taskToken {
+            taskID = try loadTaskID(store: store, token: token)
+        } else if let id = currentTaskID {
+            taskID = id
+        } else if let latest = try store.listTasks().first(where: { $0.completionState == .open }) {
+            taskID = latest.id
+        } else {
+            throw ValidationError("No open task. Use: auto <request>")
+        }
+        guard let task = try store.fetchTask(id: taskID) else {
+            throw ValidationError("Task '\(taskID)' not found.")
+        }
+
+        // Resolve worker
+        let workerStr: String
+        if let w = resolvedWorkerStr {
+            workerStr = w.lowercased()
+        } else if let taskWorker = task.targetWorker, taskWorker != .localModel {
+            workerStr = taskWorker.rawValue
+        } else {
+            throw ValidationError("No worker resolved. Use: send claude [TASK]  or  send codex [TASK]")
+        }
+        guard let worker = OpenJarvisWorkerKind(rawValue: workerStr), worker != .localModel else {
+            throw ValidationError("Worker '\(workerStr)' not supported for send. Use: claude or codex")
+        }
+
+        // Resolve binary
+        let binaryPath = try resolveBinary(workerStr)
+
+        // Get or generate packet
+        let packetText: String
+        if let existing = task.packetText, !existing.isEmpty {
+            packetText = existing
+        } else {
+            let packet = try store.generatePacket(for: taskID, role: worker, limit: 5, scopeHint: nil)
+            packetText = packet.markdown
+        }
+
+        // Packet delivered via stdin; workerArgs contain only flags
+        let workerArgs: [String]
+        switch worker {
+        case .claude:
+            workerArgs = ["-p", "--no-session-persistence"]
+        case .codex:
+            workerArgs = ["exec"]
+        case .localModel:
+            fatalError("unreachable")
+        }
+
+        // Resolve output artifact path
+        let vault = try OpenJarvisPaths.vaultRoot()
+        let runDir = vault.appendingPathComponent("70_SessionContinuity/WorkerRuns")
+        try FileManager.default.createDirectory(at: runDir, withIntermediateDirectories: true)
+        let formatter: ISO8601DateFormatter = {
+            let f = ISO8601DateFormatter()
+            f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            return f
+        }()
+        let ts = formatter.string(from: Date())
+            .replacingOccurrences(of: ":", with: "-")
+            .replacingOccurrences(of: ".", with: "-")
+        let outputFileName = "\(ts)-\(taskID.prefix(8).lowercased())-\(workerStr).md"
+        let outputURL = runDir.appendingPathComponent(outputFileName)
+
+        // Display command summary for confirmation
+        let displayCmd: String
+        switch worker {
+        case .claude:
+            displayCmd = "claude -p --no-session-persistence  [\(packetText.count) chars via stdin]"
+        case .codex:
+            displayCmd = "codex exec  [\(packetText.count) chars via stdin]"
+        case .localModel:
+            fatalError("unreachable")
+        }
+
+        printSection("send \(workerStr)")
+        print("  task:    \(taskID.prefix(8))")
+        print("  worker:  \(worker.displayName)")
+        print("  packet:  \(packetText.count) chars")
+        print("  output:  WorkerRuns/\(outputFileName)")
+        print("  command: \(displayCmd)")
+
+        if parsed.hasFlag("dry-run") {
+            print("")
+            print("  (dry-run — no worker launched)")
+            return
+        }
+
+        if !parsed.hasFlag("yes") {
+            print("")
+            print("  Run? [y/N] ", terminator: "")
+            guard let answer = readLine(strippingNewline: true)?.trimmingCharacters(in: .whitespaces).lowercased(),
+                  answer == "y" || answer == "yes" else {
+                print("  aborted")
+                return
+            }
+        }
+
+        try store.recordEvent(taskID: taskID, type: "task.worker_invoked", payload: [
+            "worker": workerStr,
+            "output_file": outputFileName
+        ])
+        currentTaskID = taskID
+
+        printSection("running \(worker.displayName)")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: binaryPath)
+        process.arguments = workerArgs
+        let stdinPipe = Pipe()
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.standardInput = stdinPipe
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+        try process.run()
+        DispatchQueue.global().async {
+            stdinPipe.fileHandleForWriting.write(Data(packetText.utf8))
+            try? stdinPipe.fileHandleForWriting.close()
+        }
+        let stdout = String(decoding: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        let stderr = String(decoding: stderrPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
+        let exitCode = Int(process.terminationStatus)
+
+        // Save artifact
+        var artifact: [String] = []
+        artifact.append("# Worker Run: \(task.interpretedObjective)")
+        artifact.append("")
+        artifact.append("Task: \(task.id)")
+        artifact.append("Worker: \(worker.displayName)")
+        artifact.append("Command: \(displayCmd)")
+        artifact.append("Invoked: \(formatter.string(from: Date()))")
+        artifact.append("Exit code: \(exitCode)")
+        artifact.append("")
+        artifact.append("## Prompt")
+        artifact.append("")
+        artifact.append(packetText)
+        artifact.append("")
+        artifact.append("## Response")
+        artifact.append("")
+        artifact.append(stdout.isEmpty ? "(no output)" : stdout)
+        if !stderr.isEmpty {
+            artifact.append("")
+            artifact.append("## Errors")
+            artifact.append("")
+            artifact.append(stderr)
+        }
+        try artifact.joined(separator: "\n").write(to: outputURL, atomically: true, encoding: .utf8)
+
+        try store.recordEvent(taskID: taskID, type: "task.worker_response_saved", payload: [
+            "worker": workerStr,
+            "exit_code": "\(exitCode)",
+            "output_file": outputFileName,
+            "response_chars": "\(stdout.count)"
+        ])
+
+        print("")
+        printSection(exitCode == 0 ? "complete" : "worker exited \(exitCode)")
+        print("  response: \(stdout.count) chars")
+        print("  saved: 70_SessionContinuity/WorkerRuns/\(outputFileName)")
+        if !stdout.isEmpty {
+            let previewLines = stdout.components(separatedBy: "\n").prefix(6)
+            print("")
+            for line in previewLines { print("  │ \(line)") }
+        }
+        print("")
+        print("  next: review output, then close \(taskID.prefix(8)) --note \"done\"")
+    }
+
+    private func resolveBinary(_ name: String) throws -> String {
+        let candidates = [
+            "/opt/homebrew/bin/\(name)",
+            "/usr/local/bin/\(name)",
+            "/usr/bin/\(name)"
+        ]
+        for path in candidates where FileManager.default.isExecutableFile(atPath: path) {
+            return path
+        }
+        throw ValidationError("\(name) not found. Ensure it is installed in /opt/homebrew/bin or /usr/local/bin.")
     }
 
     private func lifecycleGuidance(for error: Error) -> String? {
@@ -658,8 +866,7 @@ struct OpenJarvisREPL {
 
     private func printAutoSelectionIfNeeded(parsed: REPLParsedArguments, taskID: String) {
         guard parsed.positionals.isEmpty else { return }
-        printSection("selected task")
-        print("  \(taskID.prefix(8))")
+        print("[jarvis] task \(taskID.prefix(8))")
     }
 
     private func printSessionHistory() {
@@ -768,9 +975,12 @@ func printNext(databaseURL: URL?) throws {
 
 func printREPLHelp() {
     printSection("commands")
-    print("  Daily flow: auto <request>  →  paste into Codex/Claude  →  close --note \"done\"  →  h  →  q")
+    print("  Daily flow: auto <request>  →  send claude  →  close --note \"done\"  →  h  →  q")
     print("")
     print("  auto <request>                   create, retrieve, packet, copy — full autopilot pipeline")
+    print("  send claude|codex [TASK]         dispatch packet to worker, capture response, save artifact")
+    print("  send ... --dry-run               show what would run without launching worker")
+    print("  send ... --yes                   skip confirmation prompt")
     print("  resume                           recover most recent open task context, auto-copy")
     print("  continue [TASK]                  smart re-enter: regenerate packet or brief recovery, auto-copy")
     print("  go <request>                     create task, generate packet, copy to clipboard")
@@ -804,7 +1014,7 @@ func parseREPLFlags(_ tokens: [String]) throws -> REPLParsedArguments {
         let token = tokens[index]
         if token.hasPrefix("--") {
             let key = String(token.dropFirst(2))
-            let boolFlags: Set<String> = ["copy", "session", "brief"]
+            let boolFlags: Set<String> = ["copy", "session", "brief", "yes", "dry-run"]
             if boolFlags.contains(key) {
                 parsed.flags.insert(key)
                 index += 1

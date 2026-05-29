@@ -759,18 +759,17 @@ func renderStatus(snapshot: OpenJarvisStatusSnapshot, vaultStatus: (resolved: Bo
     lines.append("[jarvis] status")
     lines.append("  database: \(snapshot.databaseURL.path)")
     lines.append("  database exists: \(snapshot.databaseExists ? "yes" : "no")")
-    lines.append("  task count: \(snapshot.taskCount.map(String.init) ?? "unavailable")")
+    lines.append("  tasks: \(snapshot.taskCount.map(String.init) ?? "unavailable")")
     if let latestTask = snapshot.latestTask {
         let obj = latestTask.objective
         let truncated = obj.count > 60 ? String(obj.prefix(57)) + "..." : obj
         lines.append("  latest task: \(latestTask.id.prefix(8)) \(userFacingStage(latestTask.stage)) \(truncated)")
-        lines.append("  latest updated: \(latestTask.updatedAt)")
+        lines.append("  latest updated: \(relativeAge(from: latestTask.updatedAt))")
     } else {
         lines.append("  latest task: none")
     }
-    lines.append("  vault root: \(vaultStatus.resolved ? "resolved" : "unresolved")")
-    lines.append("  vault detail: \(vaultStatus.detail)")
-    lines.append("  mode: manual-first, read-only status")
+    lines.append("  vault: \(vaultStatus.resolved ? vaultStatus.detail : "unresolved — \(vaultStatus.detail)")")
+    lines.append("  mode: manual-first")
     return lines.joined(separator: "\n")
 }
 
@@ -783,6 +782,9 @@ func humanEventLabel(_ type: String) -> String {
     case "task.created": return "created"
     case "task.retrieved": return "context retrieved"
     case "task.packet_generated": return "packet generated"
+    case "task.autopilot_launch": return "autopilot launch"
+    case "task.worker_invoked": return "worker invoked"
+    case "task.worker_response_saved": return "response saved"
     case "task.completed": return "completed"
     case "task.writeback": return "writeback"
     case "task.session_closed": return "session closed"
