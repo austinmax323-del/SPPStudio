@@ -391,7 +391,7 @@ struct OpenJarvisREPL {
         guard !tokens.isEmpty else {
             printSection("send")
             print("  Usage: send claude [TASK]  |  send codex [TASK]  |  send [TASK] --worker claude|codex")
-            print("  Flags: --dry-run  --yes")
+            print("  Flags: --dry-run  --yes  --cwd <path>  --vault <path>")
             print("  Example: send claude --dry-run")
             return
         }
@@ -459,9 +459,40 @@ struct OpenJarvisREPL {
             fatalError("unreachable")
         }
 
+        // Resolve working directory: --cwd > git repo root > cwd
+        let resolvedCwd: String
+        if let cwdOverride = parsed.value("cwd") {
+            resolvedCwd = cwdOverride
+        } else {
+            resolvedCwd = detectRepoRoot() ?? FileManager.default.currentDirectoryPath
+        }
+
+        // Resolve vault: --vault > task vaultRoot > auto-detect
+        let resolvedVault: String?
+        if let vaultOverride = parsed.value("vault") {
+            resolvedVault = vaultOverride
+        } else if let taskVault = task.vaultRoot, !taskVault.isEmpty {
+            resolvedVault = taskVault
+        } else {
+            resolvedVault = try? OpenJarvisPaths.vaultRoot().path
+        }
+
+        // Sanity probes
+        guard FileManager.default.fileExists(atPath: resolvedCwd) else {
+            throw ValidationError("Working directory does not exist: \(resolvedCwd)")
+        }
+        if let v = resolvedVault, !FileManager.default.fileExists(atPath: v) {
+            throw ValidationError("Vault path does not exist: \(v)")
+        }
+
         // Resolve output artifact path
-        let vault = try OpenJarvisPaths.vaultRoot()
-        let runDir = vault.appendingPathComponent("70_SessionContinuity/WorkerRuns")
+        let vaultURL: URL
+        if let v = resolvedVault {
+            vaultURL = URL(fileURLWithPath: v)
+        } else {
+            vaultURL = try OpenJarvisPaths.vaultRoot()
+        }
+        let runDir = vaultURL.appendingPathComponent("70_SessionContinuity/WorkerRuns")
         try FileManager.default.createDirectory(at: runDir, withIntermediateDirectories: true)
         let formatter: ISO8601DateFormatter = {
             let f = ISO8601DateFormatter()
@@ -488,6 +519,8 @@ struct OpenJarvisREPL {
         printSection("send \(workerStr)")
         print("  task:    \(taskID.prefix(8))")
         print("  worker:  \(worker.displayName)")
+        print("  cwd:     \(resolvedCwd)")
+        if let v = resolvedVault { print("  vault:   \(v)") }
         print("  packet:  \(packetText.count) chars")
         print("  output:  WorkerRuns/\(outputFileName)")
         print("  command: \(displayCmd)")
@@ -518,6 +551,10 @@ struct OpenJarvisREPL {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binaryPath)
         process.arguments = workerArgs
+        process.currentDirectoryURL = URL(fileURLWithPath: resolvedCwd)
+        var workerEnv = ProcessInfo.processInfo.environment
+        if let v = resolvedVault { workerEnv["OPENJARVIS_VAULT"] = v }
+        process.environment = workerEnv
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
@@ -541,6 +578,8 @@ struct OpenJarvisREPL {
         artifact.append("Task: \(task.id)")
         artifact.append("Worker: \(worker.displayName)")
         artifact.append("Command: \(displayCmd)")
+        artifact.append("Working Directory: \(resolvedCwd)")
+        if let v = resolvedVault { artifact.append("Vault: \(v)") }
         artifact.append("Invoked: \(formatter.string(from: Date()))")
         artifact.append("Exit code: \(exitCode)")
         artifact.append("")
@@ -577,6 +616,21 @@ struct OpenJarvisREPL {
         }
         print("")
         print("  next: review output, then close \(taskID.prefix(8)) --note \"done\"")
+    }
+
+    private func detectRepoRoot() -> String? {
+        let git = Process()
+        git.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        git.arguments = ["rev-parse", "--show-toplevel"]
+        let pipe = Pipe()
+        git.standardOutput = pipe
+        git.standardError = Pipe()
+        guard (try? git.run()) != nil else { return nil }
+        git.waitUntilExit()
+        guard git.terminationStatus == 0 else { return nil }
+        let out = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        let trimmed = out.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private func resolveBinary(_ name: String) throws -> String {
@@ -981,6 +1035,8 @@ func printREPLHelp() {
     print("  send claude|codex [TASK]         dispatch packet to worker, capture response, save artifact")
     print("  send ... --dry-run               show what would run without launching worker")
     print("  send ... --yes                   skip confirmation prompt")
+    print("  send ... --cwd <path>            override working directory for worker subprocess")
+    print("  send ... --vault <path>          set OPENJARVIS_VAULT env var in worker subprocess")
     print("  resume                           recover most recent open task context, auto-copy")
     print("  continue [TASK]                  smart re-enter: regenerate packet or brief recovery, auto-copy")
     print("  go <request>                     create task, generate packet, copy to clipboard")
