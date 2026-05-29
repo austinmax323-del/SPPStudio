@@ -8,9 +8,19 @@
 # Obsidian Local REST API plugin stores the same apiKey in its data.json.
 SPPStudioDocs/.obsidian/plugins/*/data.json
 SPPStudioDocs/.obsidian/workspace*.json
+SPPStudioDocs/.obsidian/graph*.json
+SPPStudioDocs/.obsidian/app.json
+SPPStudioDocs/.obsidian/appearance.json
+SPPStudioDocs/.obsidian/backlink.json
+SPPStudioDocs/.obsidian/types.json
+
+# --- Local AI/tool state ---
+.claude/
+.codex/
 
 # --- Build artifacts ---
 .build/
+.swiftpm/
 dist/
 *.xcworkspace/xcuserdata/
 *.xcodeproj/xcuserdata/
@@ -21,6 +31,7 @@ DerivedData/
 # --- Regenerated session/runtime state (machine-local, churns constantly) ---
 script/state/
 ~/Library/Caches/SPPStudio/
+SPPStudioDocs/70_SessionContinuity/WorkerRuns/*.md
 
 # --- Prompt-bridge ephemeral queues (keep templates, drop in-flight prompts) ---
 SPPStudioDocs/40_PromptEngineering/PromptBridge/Queue/state/
