@@ -29,6 +29,7 @@ struct Jarvis: ParsableCommand {
         subcommands: [
             ShellCommand.self,
             AskCommand.self,
+            SendCommand.self,
             StatusCommand.self,
             CloseCommand.self,
             HistoryCommand.self,
@@ -51,6 +52,54 @@ struct Jarvis: ParsableCommand {
     func run() throws {
         var repl = OpenJarvisREPL(databaseURL: options.databaseURL())
         try repl.run()
+    }
+}
+
+struct SendCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "send",
+        abstract: "Run a Claude/Codex worker and save a review artifact"
+    )
+
+    @Argument(help: "Worker: claude | codex")
+    var worker: String
+
+    @Argument(help: "Optional task ID")
+    var task: String?
+
+    @Flag(name: .long, help: "Show command and git context without launching worker")
+    var dryRun: Bool = false
+
+    @Flag(name: .long, help: "Skip confirmation prompt")
+    var yes: Bool = false
+
+    @Flag(name: .long, help: "Show command details")
+    var verbose: Bool = false
+
+    @Flag(name: .long, help: "Include before/after git snapshots in artifact")
+    var artifactVerbose: Bool = false
+
+    @Option(name: .long, help: "Working directory for worker subprocess")
+    var cwd: String?
+
+    @Option(name: .long, help: "Vault root path for artifact output")
+    var vault: String?
+
+    @OptionGroup var options: OpenJarvisCLIOptions
+
+    func run() throws {
+        _ = try performWorkerSend(
+            databaseURL: options.databaseURL(),
+            currentTaskID: nil,
+            workerName: worker,
+            taskToken: task,
+            dryRun: dryRun,
+            assumeYes: yes,
+            cwdOverride: cwd,
+            vaultOverride: vault,
+            verbose: verbose,
+            artifactVerbose: artifactVerbose
+        )
     }
 }
 

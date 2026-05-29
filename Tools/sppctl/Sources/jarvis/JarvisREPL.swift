@@ -388,256 +388,28 @@ struct OpenJarvisREPL {
             print("  send codex [task]")
             return
         }
-        let store = try OpenJarvisStore(databaseURL: parsed.databaseURL ?? databaseURL)
-
-        // First positional may be worker name or task token
         let rawPositionals = parsed.positionals
-        var resolvedWorkerStr: String? = parsed.value("worker")
+        var workerName = parsed.value("worker")
         let taskToken: String?
         if let first = rawPositionals.first, ["claude", "codex"].contains(first.lowercased()) {
-            resolvedWorkerStr = resolvedWorkerStr ?? first.lowercased()
+            workerName = workerName ?? first.lowercased()
             taskToken = rawPositionals.dropFirst().first
         } else {
             taskToken = rawPositionals.first
         }
-
-        // Resolve task
-        let taskID: String
-        if let token = taskToken {
-            taskID = try loadTaskID(store: store, token: token)
-        } else if let id = currentTaskID {
-            taskID = id
-        } else if let latest = try store.listTasks().first(where: { $0.completionState == .open }) {
-            taskID = latest.id
-        } else {
-            throw ValidationError("No open task. Use: ask \"your request\"")
-        }
-        guard let task = try store.fetchTask(id: taskID) else {
-            throw ValidationError("Task '\(taskID)' not found.")
-        }
-
-        // Resolve worker
-        let workerStr: String
-        if let w = resolvedWorkerStr {
-            workerStr = w.lowercased()
-        } else if let taskWorker = task.targetWorker, taskWorker != .localModel {
-            workerStr = taskWorker.rawValue
-        } else {
-            throw ValidationError("No worker resolved. Use: send claude [TASK]  or  send codex [TASK]")
-        }
-        guard let worker = OpenJarvisWorkerKind(rawValue: workerStr), worker != .localModel else {
-            throw ValidationError("Worker '\(workerStr)' not supported for send. Use: claude or codex")
-        }
-
-        // Resolve binary
-        let binaryPath = try resolveBinary(workerStr)
-
-        // Get or generate packet
-        let packetText: String
-        if let existing = task.packetText, !existing.isEmpty {
-            packetText = existing
-        } else {
-            let packet = try store.generatePacket(for: taskID, role: worker, limit: 5, scopeHint: nil)
-            packetText = packet.markdown
-        }
-
-        // Packet delivered via stdin; workerArgs contain only flags
-        let workerArgs: [String]
-        switch worker {
-        case .claude:
-            workerArgs = ["-p", "--no-session-persistence"]
-        case .codex:
-            workerArgs = ["exec"]
-        case .localModel:
-            fatalError("unreachable")
-        }
-
-        // Resolve working directory: --cwd > git repo root > cwd
-        let resolvedCwd: String
-        if let cwdOverride = parsed.value("cwd") {
-            resolvedCwd = cwdOverride
-        } else {
-            resolvedCwd = detectRepoRoot() ?? FileManager.default.currentDirectoryPath
-        }
-
-        // Resolve vault: --vault > task vaultRoot > auto-detect
-        let resolvedVault: String?
-        if let vaultOverride = parsed.value("vault") {
-            resolvedVault = vaultOverride
-        } else if let taskVault = task.vaultRoot, !taskVault.isEmpty {
-            resolvedVault = taskVault
-        } else {
-            resolvedVault = try? OpenJarvisPaths.vaultRoot().path
-        }
-
-        // Sanity probes
-        guard FileManager.default.fileExists(atPath: resolvedCwd) else {
-            throw ValidationError("Working directory does not exist: \(resolvedCwd)")
-        }
-        if let v = resolvedVault, !FileManager.default.fileExists(atPath: v) {
-            throw ValidationError("Vault path does not exist: \(v)")
-        }
-
-        // Resolve output artifact path
-        let vaultURL: URL
-        if let v = resolvedVault {
-            vaultURL = URL(fileURLWithPath: v)
-        } else {
-            vaultURL = try OpenJarvisPaths.vaultRoot()
-        }
-        let runDir = vaultURL.appendingPathComponent("70_SessionContinuity/WorkerRuns")
-        try FileManager.default.createDirectory(at: runDir, withIntermediateDirectories: true)
-        let formatter: ISO8601DateFormatter = {
-            let f = ISO8601DateFormatter()
-            f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            return f
-        }()
-        let ts = formatter.string(from: Date())
-            .replacingOccurrences(of: ":", with: "-")
-            .replacingOccurrences(of: ".", with: "-")
-        let outputFileName = "\(ts)-\(taskID.prefix(8).lowercased())-\(workerStr).md"
-        let outputURL = runDir.appendingPathComponent(outputFileName)
-
-        // Display command summary for confirmation
-        let displayCmd: String
-        switch worker {
-        case .claude:
-            displayCmd = "claude -p --no-session-persistence  [\(packetText.count) chars via stdin]"
-        case .codex:
-            displayCmd = "codex exec  [\(packetText.count) chars via stdin]"
-        case .localModel:
-            fatalError("unreachable")
-        }
-
-        printSection("Send to \(worker.displayName)?")
-        print("  Task    \(taskID.prefix(8))")
-        print("  Output  WorkerRuns/\(outputFileName)")
-        if parsed.hasFlag("verbose") || parsed.hasFlag("dry-run") {
-            print("")
-            print("  cwd     \(resolvedCwd)")
-            if let v = resolvedVault { print("  vault   \(v)") }
-            print("  packet  \(packetText.count) chars")
-            print("  cmd     \(displayCmd)")
-        }
-
-        if parsed.hasFlag("dry-run") {
-            print("")
-            print("  Dry run only. No worker launched.")
-            return
-        }
-
-        if !parsed.hasFlag("yes") {
-            print("")
-            print("  Run? [y/N] ", terminator: "")
-            guard let answer = readLine(strippingNewline: true)?.trimmingCharacters(in: .whitespaces).lowercased(),
-                  answer == "y" || answer == "yes" else {
-                print("  Aborted.")
-                return
-            }
-        }
-
-        try store.recordEvent(taskID: taskID, type: "task.worker_invoked", payload: [
-            "worker": workerStr,
-            "output_file": outputFileName
-        ])
-        currentTaskID = taskID
-
-        printSection("Running \(worker.displayName)")
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: binaryPath)
-        process.arguments = workerArgs
-        process.currentDirectoryURL = URL(fileURLWithPath: resolvedCwd)
-        var workerEnv = ProcessInfo.processInfo.environment
-        if let v = resolvedVault { workerEnv["OPENJARVIS_VAULT"] = v }
-        process.environment = workerEnv
-        let stdinPipe = Pipe()
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardInput = stdinPipe
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-        try process.run()
-        DispatchQueue.global().async {
-            stdinPipe.fileHandleForWriting.write(Data(packetText.utf8))
-            try? stdinPipe.fileHandleForWriting.close()
-        }
-        let stdout = String(decoding: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        let stderr = String(decoding: stderrPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        process.waitUntilExit()
-        let exitCode = Int(process.terminationStatus)
-
-        // Save artifact
-        var artifact: [String] = []
-        artifact.append("# Worker Run: \(task.interpretedObjective)")
-        artifact.append("")
-        artifact.append("Task: \(task.id)")
-        artifact.append("Worker: \(worker.displayName)")
-        artifact.append("Command: \(displayCmd)")
-        artifact.append("Working Directory: \(resolvedCwd)")
-        if let v = resolvedVault { artifact.append("Vault: \(v)") }
-        artifact.append("Invoked: \(formatter.string(from: Date()))")
-        artifact.append("Exit code: \(exitCode)")
-        artifact.append("")
-        artifact.append("## Prompt")
-        artifact.append("")
-        artifact.append(packetText)
-        artifact.append("")
-        artifact.append("## Response")
-        artifact.append("")
-        artifact.append(stdout.isEmpty ? "(no output)" : stdout)
-        if !stderr.isEmpty {
-            artifact.append("")
-            artifact.append("## Errors")
-            artifact.append("")
-            artifact.append(stderr)
-        }
-        try artifact.joined(separator: "\n").write(to: outputURL, atomically: true, encoding: .utf8)
-
-        try store.recordEvent(taskID: taskID, type: "task.worker_response_saved", payload: [
-            "worker": workerStr,
-            "exit_code": "\(exitCode)",
-            "output_file": outputFileName,
-            "response_chars": "\(stdout.count)"
-        ])
-
-        print("")
-        printSection(exitCode == 0 ? "Saved" : "Worker exited \(exitCode)")
-        print("  Exit    \(exitCode)")
-        print("  Output  WorkerRuns/\(outputFileName)")
-        if !stdout.isEmpty {
-            let previewLines = stdout.components(separatedBy: "\n").prefix(6)
-            print("")
-            for line in previewLines { print("  │ \(line)") }
-        }
-        print("")
-        print("  Next    review, then close \(taskID.prefix(8)) --note \"done\"")
-    }
-
-    private func detectRepoRoot() -> String? {
-        let git = Process()
-        git.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        git.arguments = ["rev-parse", "--show-toplevel"]
-        let pipe = Pipe()
-        git.standardOutput = pipe
-        git.standardError = Pipe()
-        guard (try? git.run()) != nil else { return nil }
-        git.waitUntilExit()
-        guard git.terminationStatus == 0 else { return nil }
-        let out = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        let trimmed = out.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private func resolveBinary(_ name: String) throws -> String {
-        let candidates = [
-            "/opt/homebrew/bin/\(name)",
-            "/usr/local/bin/\(name)",
-            "/usr/bin/\(name)"
-        ]
-        for path in candidates where FileManager.default.isExecutableFile(atPath: path) {
-            return path
-        }
-        throw ValidationError("\(name) not found. Ensure it is installed in /opt/homebrew/bin or /usr/local/bin.")
+        let result = try performWorkerSend(
+            databaseURL: parsed.databaseURL ?? databaseURL,
+            currentTaskID: currentTaskID,
+            workerName: workerName,
+            taskToken: taskToken,
+            dryRun: parsed.hasFlag("dry-run"),
+            assumeYes: parsed.hasFlag("yes"),
+            cwdOverride: parsed.value("cwd"),
+            vaultOverride: parsed.value("vault"),
+            verbose: parsed.hasFlag("verbose"),
+            artifactVerbose: parsed.hasFlag("artifact-verbose")
+        )
+        currentTaskID = result.taskID
     }
 
     private func lifecycleGuidance(for error: Error) -> String? {
@@ -1037,6 +809,467 @@ func printREPLHelp(_ tokens: [String] = []) {
     print("  help --advanced            show internal utilities")
 }
 
+struct WorkerSendResult {
+    let taskID: String
+    let outputFileName: String?
+}
+
+private struct GitSnapshot {
+    let isRepo: Bool
+    let statusShort: String
+    let diffNameStatus: String
+    let diffStat: String
+    let error: String?
+}
+
+func performWorkerSend(
+    databaseURL: URL?,
+    currentTaskID: String?,
+    workerName: String?,
+    taskToken: String?,
+    dryRun: Bool,
+    assumeYes: Bool,
+    cwdOverride: String?,
+    vaultOverride: String?,
+    verbose: Bool,
+    artifactVerbose: Bool
+) throws -> WorkerSendResult {
+    let store = try OpenJarvisStore(databaseURL: databaseURL)
+
+    let taskID: String
+    if let token = taskToken {
+        taskID = try loadTaskID(store: store, token: token)
+    } else if let currentTaskID {
+        taskID = currentTaskID
+    } else if let latest = try store.listTasks().first(where: { $0.completionState == .open }) {
+        taskID = latest.id
+    } else {
+        throw ValidationError("No open task. Use: ask \"your request\"")
+    }
+    guard let task = try store.fetchTask(id: taskID) else {
+        throw ValidationError("Task '\(taskID)' not found.")
+    }
+
+    let workerStr: String
+    if let workerName {
+        workerStr = workerName.lowercased()
+    } else if let taskWorker = task.targetWorker, taskWorker != .localModel {
+        workerStr = taskWorker.rawValue
+    } else {
+        throw ValidationError("No worker resolved. Use: send claude [TASK]  or  send codex [TASK]")
+    }
+    guard let worker = OpenJarvisWorkerKind(rawValue: workerStr), worker != .localModel else {
+        throw ValidationError("Worker '\(workerStr)' not supported for send. Use: claude or codex")
+    }
+
+    let binaryPath = try resolveWorkerBinary(workerStr)
+    let packetText: String
+    if let existing = task.packetText, !existing.isEmpty {
+        packetText = existing
+    } else {
+        let packet = try store.generatePacket(for: taskID, role: worker, limit: 5, scopeHint: nil)
+        packetText = packet.markdown
+    }
+
+    let workerArgs: [String]
+    switch worker {
+    case .claude:
+        workerArgs = ["-p", "--no-session-persistence"]
+    case .codex:
+        workerArgs = ["exec"]
+    case .localModel:
+        fatalError("unreachable")
+    }
+
+    let resolvedCwd = cwdOverride ?? detectGitRepoRoot() ?? FileManager.default.currentDirectoryPath
+    guard FileManager.default.fileExists(atPath: resolvedCwd) else {
+        throw ValidationError("Working directory does not exist: \(resolvedCwd)")
+    }
+
+    let resolvedVault: String?
+    if let vaultOverride {
+        resolvedVault = vaultOverride
+    } else if let taskVault = task.vaultRoot, !taskVault.isEmpty {
+        resolvedVault = taskVault
+    } else {
+        resolvedVault = try? OpenJarvisPaths.vaultRoot().path
+    }
+    if let v = resolvedVault, !FileManager.default.fileExists(atPath: v) {
+        throw ValidationError("Vault path does not exist: \(v)")
+    }
+
+    let vaultURL = try resolvedVault.map { URL(fileURLWithPath: $0) } ?? OpenJarvisPaths.vaultRoot()
+    let runDir = vaultURL.appendingPathComponent("70_SessionContinuity/WorkerRuns")
+    try FileManager.default.createDirectory(at: runDir, withIntermediateDirectories: true)
+
+    let formatter = workerArtifactDateFormatter()
+    let ts = formatter.string(from: Date())
+        .replacingOccurrences(of: ":", with: "-")
+        .replacingOccurrences(of: ".", with: "-")
+    let outputFileName = "\(ts)-\(taskID.prefix(8).lowercased())-\(workerStr).md"
+    let outputURL = runDir.appendingPathComponent(outputFileName)
+
+    let displayCmd: String
+    switch worker {
+    case .claude:
+        displayCmd = "claude -p --no-session-persistence  [\(packetText.count) chars via stdin]"
+    case .codex:
+        displayCmd = "codex exec  [\(packetText.count) chars via stdin]"
+    case .localModel:
+        fatalError("unreachable")
+    }
+
+    let beforeGit = captureGitSnapshot(cwd: resolvedCwd)
+
+    printSection("Send to \(worker.displayName)?")
+    print("  Task    \(taskID.prefix(8))")
+    print("  Output  WorkerRuns/\(outputFileName)")
+    if verbose || dryRun {
+        print("")
+        print("  cwd     \(resolvedCwd)")
+        if let v = resolvedVault { print("  vault   \(v)") }
+        print("  packet  \(packetText.count) chars")
+        print("  cmd     \(displayCmd)")
+        print("  git     \(beforeGit.isRepo ? "repo" : "not a repo")")
+    }
+
+    if dryRun {
+        print("")
+        print("  Dry run only. No worker launched.")
+        return WorkerSendResult(taskID: taskID, outputFileName: nil)
+    }
+
+    if !assumeYes {
+        print("")
+        print("  Run? [y/N] ", terminator: "")
+        guard let answer = readLine(strippingNewline: true)?.trimmingCharacters(in: .whitespaces).lowercased(),
+              answer == "y" || answer == "yes" else {
+            print("  Aborted.")
+            return WorkerSendResult(taskID: taskID, outputFileName: nil)
+        }
+    }
+
+    try store.recordEvent(taskID: taskID, type: "task.worker_invoked", payload: [
+        "worker": workerStr,
+        "output_file": outputFileName
+    ])
+
+    printSection("Running \(worker.displayName)")
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: binaryPath)
+    process.arguments = workerArgs
+    process.currentDirectoryURL = URL(fileURLWithPath: resolvedCwd)
+    var workerEnv = ProcessInfo.processInfo.environment
+    if let v = resolvedVault { workerEnv["OPENJARVIS_VAULT"] = v }
+    process.environment = workerEnv
+    let stdinPipe = Pipe()
+    let stdoutPipe = Pipe()
+    let stderrPipe = Pipe()
+    process.standardInput = stdinPipe
+    process.standardOutput = stdoutPipe
+    process.standardError = stderrPipe
+    try process.run()
+    DispatchQueue.global().async {
+        stdinPipe.fileHandleForWriting.write(Data(packetText.utf8))
+        try? stdinPipe.fileHandleForWriting.close()
+    }
+    let stdout = String(decoding: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    let stderr = String(decoding: stderrPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    process.waitUntilExit()
+    let exitCode = Int(process.terminationStatus)
+    let afterGit = captureGitSnapshot(cwd: resolvedCwd)
+    let invokedAt = formatter.string(from: Date())
+
+    let artifact = renderWorkerRunArtifact(
+        task: task,
+        worker: worker,
+        displayCommand: displayCmd,
+        resolvedCwd: resolvedCwd,
+        resolvedVault: resolvedVault,
+        invokedAt: invokedAt,
+        exitCode: exitCode,
+        beforeGit: beforeGit,
+        afterGit: afterGit,
+        stdout: stdout,
+        stderr: stderr,
+        artifactVerbose: artifactVerbose
+    )
+    try artifact.write(to: outputURL, atomically: true, encoding: .utf8)
+
+    try store.recordEvent(taskID: taskID, type: "task.worker_response_saved", payload: [
+        "worker": workerStr,
+        "exit_code": "\(exitCode)",
+        "output_file": outputFileName,
+        "response_chars": "\(stdout.count)"
+    ])
+
+    print("")
+    printSection(exitCode == 0 ? "Saved" : "Worker exited \(exitCode)")
+    print("  Exit    \(exitCode)")
+    print("  Output  WorkerRuns/\(outputFileName)")
+    if !stdout.isEmpty {
+        let previewLines = usefulPreview(stdout).components(separatedBy: "\n").prefix(6)
+        print("")
+        for line in previewLines { print("  │ \(line)") }
+    }
+    print("")
+    print("  Next    review diff, then close \(taskID.prefix(8)) --note \"done\"")
+    return WorkerSendResult(taskID: taskID, outputFileName: outputFileName)
+}
+
+private func renderWorkerRunArtifact(
+    task: OpenJarvisTask,
+    worker: OpenJarvisWorkerKind,
+    displayCommand: String,
+    resolvedCwd: String,
+    resolvedVault: String?,
+    invokedAt: String,
+    exitCode: Int,
+    beforeGit: GitSnapshot,
+    afterGit: GitSnapshot,
+    stdout: String,
+    stderr: String,
+    artifactVerbose: Bool
+) -> String {
+    var lines: [String] = []
+    lines.append("# Worker Run")
+    lines.append("")
+    lines.append("## Summary")
+    lines.append("- Task: \(task.interpretedObjective)")
+    lines.append("- Worker: \(worker.displayName)")
+    lines.append("- Exit: \(exitCode)")
+    lines.append("- Time: \(invokedAt)")
+    lines.append("- CWD: \(resolvedCwd)")
+    lines.append("- Vault: \(resolvedVault ?? "(unresolved)")")
+    lines.append("")
+    lines.append("## Review First")
+    appendReviewFirst(afterGit, to: &lines)
+    lines.append("")
+    lines.append("## Changed Files")
+    appendGitNameStatus(afterGit, to: &lines)
+    lines.append("")
+    lines.append("## Diff Stat")
+    appendGitDiffStat(afterGit, to: &lines)
+    lines.append("")
+    lines.append("## Review Checklist")
+    lines.append("- Build/test result: Not determined by Jarvis. Review worker output and run verification.")
+    lines.append("- Files to inspect: \(filesToInspect(from: afterGit))")
+    lines.append("- Risk: Manual review required. Jarvis does not infer risk from worker text.")
+    lines.append("- Follow-up: Review diff, run tests, then close task when validated.")
+    if artifactVerbose {
+        lines.append("")
+        lines.append("## Git Snapshot Before")
+        appendGitSnapshot(beforeGit, to: &lines)
+        lines.append("")
+        lines.append("## Git Snapshot After")
+        appendGitSnapshot(afterGit, to: &lines)
+    }
+    lines.append("")
+    lines.append("## Worker Response Preview")
+    lines.append("")
+    lines.append(usefulPreview(stdout))
+    lines.append("")
+    lines.append("## Full Transcript")
+    lines.append("")
+    lines.append("Command: \(displayCommand)")
+    lines.append("")
+    lines.append("### stdout")
+    lines.append("")
+    lines.append(fencedText(stdout.isEmpty ? "(no stdout)" : stdout))
+    lines.append("")
+    lines.append("### stderr")
+    lines.append("")
+    lines.append(fencedText(stderr.isEmpty ? "(no stderr)" : stderr))
+    return lines.joined(separator: "\n")
+}
+
+private func appendGitNameStatus(_ snapshot: GitSnapshot, to lines: inout [String]) {
+    guard snapshot.isRepo else {
+        lines.append("- Not a git repository at CWD.")
+        if let error = snapshot.error { lines.append("- Git error: \(error)") }
+        return
+    }
+    let value = snapshot.diffNameStatus.trimmingCharacters(in: .whitespacesAndNewlines)
+    if value.isEmpty {
+        lines.append("- No working tree changes detected by git diff --name-status.")
+        return
+    }
+    for line in value.components(separatedBy: "\n") where !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        lines.append("- \(line)")
+    }
+}
+
+private func appendReviewFirst(_ snapshot: GitSnapshot, to lines: inout [String]) {
+    guard snapshot.isRepo else {
+        lines.append("Not a git repository at CWD.")
+        return
+    }
+    let files = changedFiles(from: snapshot)
+    guard !files.isEmpty else {
+        lines.append("No changed files detected.")
+        return
+    }
+    lines.append("- Inspect:")
+    for file in files {
+        lines.append("  - \(file)")
+    }
+    lines.append("- Command:")
+    for file in files {
+        lines.append("  - git diff -- \(shellQuoted(file))")
+    }
+}
+
+private func appendGitDiffStat(_ snapshot: GitSnapshot, to lines: inout [String]) {
+    guard snapshot.isRepo else {
+        lines.append("Not a git repository at CWD.")
+        return
+    }
+    let value = snapshot.diffStat.trimmingCharacters(in: .whitespacesAndNewlines)
+    lines.append(value.isEmpty ? "No diff stat." : fencedText(value))
+}
+
+private func appendGitSnapshot(_ snapshot: GitSnapshot, to lines: inout [String]) {
+    guard snapshot.isRepo else {
+        lines.append("Not a git repository at CWD.")
+        if let error = snapshot.error { lines.append("Git error: \(error)") }
+        return
+    }
+    lines.append("### git status --short")
+    lines.append(fencedText(snapshot.statusShort.isEmpty ? "(clean)" : snapshot.statusShort))
+    lines.append("")
+    lines.append("### git diff --name-status")
+    lines.append(fencedText(snapshot.diffNameStatus.isEmpty ? "(empty)" : snapshot.diffNameStatus))
+    lines.append("")
+    lines.append("### git diff --stat")
+    lines.append(fencedText(snapshot.diffStat.isEmpty ? "(empty)" : snapshot.diffStat))
+}
+
+private func filesToInspect(from snapshot: GitSnapshot) -> String {
+    guard snapshot.isRepo else { return "CWD is not a git repository" }
+    let files = changedFiles(from: snapshot)
+    guard !files.isEmpty else { return "None from git diff --name-status" }
+    return files.joined(separator: ", ")
+}
+
+private func changedFiles(from snapshot: GitSnapshot) -> [String] {
+    guard snapshot.isRepo else { return [] }
+    return snapshot.diffNameStatus
+        .components(separatedBy: "\n")
+        .compactMap { line -> String? in
+            let fields = line.split(separator: "\t", omittingEmptySubsequences: false)
+            guard let path = fields.last.map(String.init)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !path.isEmpty
+            else { return nil }
+            return path
+        }
+}
+
+private func usefulPreview(_ stdout: String) -> String {
+    let trimmedLines = stdout
+        .components(separatedBy: "\n")
+        .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    let preview = trimmedLines.prefix(10).joined(separator: "\n")
+    if preview.isEmpty { return "(no stdout)" }
+    if preview.count <= 1200 { return preview }
+    let index = preview.index(preview.startIndex, offsetBy: 1200)
+    return String(preview[..<index]) + "\n... truncated ..."
+}
+
+private func fencedText(_ text: String) -> String {
+    "````text\n\(text)\n````"
+}
+
+private func shellQuoted(_ value: String) -> String {
+    guard !value.isEmpty else { return "''" }
+    let safe = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "/._-"))
+    if value.unicodeScalars.allSatisfy({ safe.contains($0) }) {
+        return value
+    }
+    return "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+}
+
+private func captureGitSnapshot(cwd: String) -> GitSnapshot {
+    let inside = runGit(["rev-parse", "--is-inside-work-tree"], cwd: cwd)
+    guard inside.exitCode == 0, inside.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "true" else {
+        return GitSnapshot(isRepo: false, statusShort: "", diffNameStatus: "", diffStat: "", error: inside.stderr.trimmedOrNil)
+    }
+    return GitSnapshot(
+        isRepo: true,
+        statusShort: runGit(["status", "--short"], cwd: cwd).stdout.trimmingCharacters(in: .whitespacesAndNewlines),
+        diffNameStatus: runGit(["diff", "--name-status"], cwd: cwd).stdout.trimmingCharacters(in: .whitespacesAndNewlines),
+        diffStat: runGit(["diff", "--stat"], cwd: cwd).stdout.trimmingCharacters(in: .whitespacesAndNewlines),
+        error: nil
+    )
+}
+
+private func runGit(_ args: [String], cwd: String) -> (exitCode: Int, stdout: String, stderr: String) {
+    runProcess("/usr/bin/git", arguments: ["-C", cwd] + args, cwd: nil, stdin: nil)
+}
+
+private func runProcess(_ executable: String, arguments: [String], cwd: String?, stdin: String?) -> (exitCode: Int, stdout: String, stderr: String) {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: executable)
+    process.arguments = arguments
+    if let cwd { process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
+    let stdoutPipe = Pipe()
+    let stderrPipe = Pipe()
+    process.standardOutput = stdoutPipe
+    process.standardError = stderrPipe
+    if let stdin {
+        let stdinPipe = Pipe()
+        process.standardInput = stdinPipe
+        do {
+            try process.run()
+            stdinPipe.fileHandleForWriting.write(Data(stdin.utf8))
+            try? stdinPipe.fileHandleForWriting.close()
+        } catch {
+            return (127, "", String(describing: error))
+        }
+    } else {
+        do {
+            try process.run()
+        } catch {
+            return (127, "", String(describing: error))
+        }
+    }
+    let stdout = String(decoding: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    let stderr = String(decoding: stderrPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    process.waitUntilExit()
+    return (Int(process.terminationStatus), stdout, stderr)
+}
+
+private func detectGitRepoRoot() -> String? {
+    let result = runProcess("/usr/bin/git", arguments: ["rev-parse", "--show-toplevel"], cwd: nil, stdin: nil)
+    guard result.exitCode == 0 else { return nil }
+    let trimmed = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+}
+
+private func resolveWorkerBinary(_ name: String) throws -> String {
+    let candidates = [
+        "/opt/homebrew/bin/\(name)",
+        "/usr/local/bin/\(name)",
+        "/usr/bin/\(name)"
+    ]
+    for path in candidates where FileManager.default.isExecutableFile(atPath: path) {
+        return path
+    }
+    throw ValidationError("\(name) not found. Ensure it is installed in /opt/homebrew/bin or /usr/local/bin.")
+}
+
+private func workerArtifactDateFormatter() -> ISO8601DateFormatter {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter
+}
+
+private extension String {
+    var trimmedOrNil: String? {
+        let value = trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
+    }
+}
+
 func parseREPLFlags(_ tokens: [String]) throws -> REPLParsedArguments {
     var parsed = REPLParsedArguments()
     var index = 0
@@ -1044,7 +1277,7 @@ func parseREPLFlags(_ tokens: [String]) throws -> REPLParsedArguments {
         let token = tokens[index]
         if token.hasPrefix("--") {
             let key = String(token.dropFirst(2))
-            let boolFlags: Set<String> = ["copy", "no-copy", "session", "brief", "yes", "dry-run", "verbose", "advanced"]
+            let boolFlags: Set<String> = ["copy", "no-copy", "session", "brief", "yes", "dry-run", "verbose", "advanced", "artifact-verbose"]
             if boolFlags.contains(key) {
                 parsed.flags.insert(key)
                 index += 1
