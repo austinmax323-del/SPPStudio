@@ -117,7 +117,7 @@ swift run jarvis task history <task-id>
 
 Python side:
 ```bash
-cd /path/to/user/Developer/openjarvis
+cd ~/Developer/openjarvis
 source .venv/bin/activate
 python -m jarvis.main status
 ```

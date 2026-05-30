@@ -1,0 +1,49 @@
+name: Feature request
+description: Suggest a feature or improvement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing, check [ROADMAP.md](../../ROADMAP.md) — the feature may already be planned.
+
+        Frame requests in terms of the **workflow problem** you are trying to solve, not just the feature you want. SPPStudio is specifically focused on jailbreak tweak development; general IDE features are lower priority than tweak-specific ones.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What workflow problem does this solve?
+      description: Describe the actual tweak development workflow that is painful or impossible today.
+      placeholder: "When I'm working on a Logos tweak, I have to..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: What would you like to see?
+      description: A concrete description of the feature.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What do you do today instead?
+      description: How do you currently work around the problem?
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: area
+    attributes:
+      label: Area
+      options:
+        - label: Editor (syntax, completion, diagnostics)
+        - label: Build system
+        - label: Device / simulator
+        - label: Theos / Logos / NIC integration
+        - label: Export / packaging
+        - label: Source navigation
+        - label: "sppctl CLI"
+        - label: Other

@@ -37,7 +37,7 @@ swift run openjarvis-checks
 Python side:
 
 ```bash
-cd /path/to/user/Developer/openjarvis
+cd ~/Developer/openjarvis
 source .venv/bin/activate
 python -m compileall jarvis tests
 python -m pytest

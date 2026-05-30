@@ -1,0 +1,72 @@
+name: Bug report
+description: Report a bug in SPPStudio
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing a bug, check [docs/current-status.md](../../docs/current-status.md) to see if the affected feature is listed as in-progress or planned — if so, the issue is likely known.
+
+  - type: input
+    id: macos_version
+    attributes:
+      label: macOS version
+      placeholder: "e.g. macOS 15.2 (Sequoia)"
+    validations:
+      required: true
+
+  - type: input
+    id: xcode_version
+    attributes:
+      label: Xcode / Swift version
+      placeholder: "e.g. Xcode 16.2, Swift 6.1"
+    validations:
+      required: false
+
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened
+      description: A clear description of the bug. Include what you were doing.
+      placeholder: "I opened a project, then..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open a project
+        2. Click ...
+        3. See error
+    validations:
+      required: false
+
+  - type: textarea
+    id: build_output
+    attributes:
+      label: Relevant build output or error messages
+      render: shell
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - label: Code editor (NSTextView / tab system)
+        - label: File navigator
+        - label: Build system / console
+        - label: Syntax highlighting
+        - label: Project creation
+        - label: "sppctl CLI"
+        - label: Other

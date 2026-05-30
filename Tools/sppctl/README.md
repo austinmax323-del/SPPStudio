@@ -9,7 +9,7 @@ It does not execute shell commands or run unattended automation. It creates task
 Install the daily wrapper:
 
 ```bash
-cd /path/to/SPPStudio
+cd ~/Developer/SPPStudio
 ./install-jarvis.sh
 ```
 
@@ -278,7 +278,7 @@ jarvis open TASK         # opens first related retrieved note or allowed file
 Swift checks run from the Swift CLI package:
 
 ```bash
-cd /path/to/SPPStudio/Tools/sppctl
+cd ~/Developer/SPPStudio/Tools/sppctl
 swift build
 swift run openjarvis-checks
 swift run jarvis status
@@ -287,7 +287,7 @@ swift run jarvis status
 Python checks run from the Python OpenJarvis checkout:
 
 ```bash
-cd /path/to/user/Developer/openjarvis
+cd ~/Developer/openjarvis
 source .venv/bin/activate
 python -m compileall jarvis tests
 python -m pytest
