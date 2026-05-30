@@ -94,7 +94,7 @@ struct EditorAreaView: View {
             }
         }
         .frame(height: IDETheme.Layout.editorTabHeight)
-        .background(Color.black.opacity(0.22))
+        .background(IDETheme.Colors.headerBackground)
     }
 
     private var emptyTabSlot: some View {
@@ -199,13 +199,9 @@ struct EditorAreaView: View {
             }
 
             Button(action: saveActiveTab) {
-                HStack(spacing: 4) {
-                    Image(systemName: "square.and.arrow.down")
-                        .font(.system(size: 10.5))
-                    Text("Save")
-                        .font(.system(size: 11, weight: .medium))
-                }
-                .foregroundStyle(tab.isDirty ? Color.accentColor : Color(white: 0.34))
+                Image(systemName: "square.and.arrow.down")
+                    .font(.system(size: 11))
+                    .foregroundStyle(tab.isDirty ? Color.accentColor : Color(white: 0.26))
             }
             .buttonStyle(.plain)
             .disabled(!tab.isDirty)
@@ -224,8 +220,8 @@ struct EditorAreaView: View {
             .help("Find  ⌘F")
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 6)
-        .background(Color.black.opacity(0.16))
+        .padding(.vertical, 7)
+        .background(IDETheme.Colors.headerBackground.opacity(0.6))
     }
 
     // MARK: - No Selection / Landing

@@ -72,19 +72,21 @@ struct IDEWindowView: View {
             .help("Build  ⌘B")
 
             Button(action: { appEnv.revealLastPackage() }) {
-                Image(systemName: "play.fill")
+                Image(systemName: "archivebox")
+                    .symbolRenderingMode(.hierarchical)
                     .foregroundStyle(appEnv.lastBuiltPackageURL != nil ? Color.green : Color.secondary)
             }
             .disabled(appEnv.lastBuiltPackageURL == nil)
             .keyboardShortcut("r", modifiers: .command)
             .help("Reveal .deb in Finder  ⌘R")
 
-            Button(action: { appEnv.stopBuild() }) {
-                Image(systemName: "stop.fill")
-                    .foregroundStyle(appEnv.isBuilding ? Color.red : Color.secondary)
+            if appEnv.isBuilding {
+                Button(action: { appEnv.stopBuild() }) {
+                    Image(systemName: "stop.fill")
+                        .foregroundStyle(Color.red)
+                }
+                .help("Stop  ⌘.")
             }
-            .disabled(!appEnv.isBuilding)
-            .help("Stop  ⌘.")
         }
 
         ToolbarItem(placement: .primaryAction) {

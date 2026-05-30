@@ -40,8 +40,8 @@ struct SimulatorPanelView: View {
             errorLabel
         }
         .padding(.horizontal, 12)
-        .frame(height: IDETheme.Layout.tabBarHeight - 2)
-        .background(Color.black.opacity(0.18))
+        .frame(height: IDETheme.Layout.tabBarHeight)
+        .background(IDETheme.Colors.headerBackground)
     }
 
     private var refreshButton: some View {
@@ -201,19 +201,14 @@ struct SimulatorPanelView: View {
     }
 
     private var emptyState: some View {
-        HStack(spacing: 8) {
-            Image(systemName: sim.activeDeviceIsBooted ? "play.circle" : "iphone.slash")
-                .font(.system(size: 12, weight: .ultraLight))
-                .foregroundStyle(Color(white: 0.20))
-            Text(sim.activeDeviceIsBooted
-                 ? "Press Stream to start live syslog."
-                 : sim.devices.isEmpty
-                     ? "No simulators found. Press \u{21BB} to refresh."
-                     : "Select and boot a simulator to stream logs.")
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(Color(white: 0.22))
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        Text(sim.activeDeviceIsBooted
+             ? "Press Stream to start live syslog."
+             : sim.devices.isEmpty
+                 ? "No simulators found — press ↻ to refresh."
+                 : "Select and boot a simulator to stream logs.")
+            .font(.system(size: 11))
+            .foregroundStyle(Color(white: 0.28))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - Helpers

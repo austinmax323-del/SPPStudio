@@ -35,8 +35,8 @@ struct BuildConsoleView: View {
             clearButton
         }
         .padding(.horizontal, 12)
-        .frame(height: IDETheme.Layout.tabBarHeight - 2)
-        .background(Color.black.opacity(0.18))
+        .frame(height: IDETheme.Layout.tabBarHeight)
+        .background(IDETheme.Colors.headerBackground)
     }
 
     private var scrollLockButton: some View {
@@ -62,7 +62,7 @@ struct BuildConsoleView: View {
                 Label("Build Succeeded", systemImage: "checkmark.circle.fill")
                     .foregroundStyle(IDETheme.Colors.consoleSuccess)
             } else {
-                Label("Ready", systemImage: "minus.circle")
+                Label("Ready", systemImage: "circle")
                     .foregroundStyle(Color(white: 0.30))
             }
         }
@@ -100,15 +100,10 @@ struct BuildConsoleView: View {
     // MARK: - Empty State
 
     private var emptyState: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "hammer")
-                .font(.system(size: 12, weight: .ultraLight))
-                .foregroundStyle(Color(white: 0.20))
-            Text("No build output yet. Press ⌘B to build.")
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(Color(white: 0.22))
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        Text("No build output — press ⌘B to build.")
+            .font(.system(size: 11))
+            .foregroundStyle(Color(white: 0.24))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - Scrolling Log

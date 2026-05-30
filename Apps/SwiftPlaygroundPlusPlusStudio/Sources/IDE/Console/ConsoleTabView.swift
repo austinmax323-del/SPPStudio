@@ -139,17 +139,17 @@ private struct ConsoleContentPlaceholder: View {
     var body: some View {
         VStack(spacing: 10) {
             Image(systemName: systemImage)
-                .font(.system(size: 18, weight: .ultraLight))
-                .foregroundStyle(Color(white: 0.22))
+                .font(.system(size: 18, weight: .thin))
+                .foregroundStyle(Color(white: 0.28))
 
             VStack(spacing: 4) {
                 Text(label)
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color(white: 0.28))
+                    .foregroundStyle(Color(white: 0.32))
                 if !description.isEmpty {
                     Text(description)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(Color(white: 0.22))
+                        .font(IDETheme.Typography.caption)
+                        .foregroundStyle(Color(white: 0.26))
                         .multilineTextAlignment(.center)
                 }
             }

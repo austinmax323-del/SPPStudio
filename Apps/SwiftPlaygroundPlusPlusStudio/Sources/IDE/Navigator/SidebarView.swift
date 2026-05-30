@@ -14,7 +14,7 @@ enum NavigatorTab: String, CaseIterable, Identifiable {
 
     var systemImage: String {
         switch self {
-        case .files:   return "doc.on.doc"
+        case .files:   return "folder"
         case .hooks:   return "bolt"
         case .symbols: return "diamond"
         case .search:  return "magnifyingglass"
@@ -24,7 +24,7 @@ enum NavigatorTab: String, CaseIterable, Identifiable {
 
     var selectedImage: String {
         switch self {
-        case .files:   return "doc.on.doc.fill"
+        case .files:   return "folder.fill"
         case .hooks:   return "bolt.fill"
         case .symbols: return "diamond.fill"
         case .search:  return "magnifyingglass"
@@ -182,27 +182,27 @@ private struct NavigatorPlaceholderView: View {
     var description: String = ""
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 10) {
             Image(systemName: systemImage)
-                .font(.system(size: 22, weight: .ultraLight))
-                .foregroundStyle(Color(white: 0.22))
+                .font(.system(size: 18, weight: .thin))
+                .foregroundStyle(Color(white: 0.30))
 
-            VStack(spacing: 5) {
+            VStack(spacing: 4) {
                 Text(label)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color(white: 0.30))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color(white: 0.34))
 
                 if !description.isEmpty {
                     Text(description)
                         .font(IDETheme.Typography.caption)
-                        .foregroundStyle(Color(white: 0.24))
+                        .foregroundStyle(Color(white: 0.28))
                         .multilineTextAlignment(.center)
-                        .lineLimit(3)
+                        .lineLimit(4)
                         .padding(.horizontal, 20)
                 }
             }
 
-            Text("COMING SOON")
+            Text("NOT YET AVAILABLE")
                 .ideComingSoonChip()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

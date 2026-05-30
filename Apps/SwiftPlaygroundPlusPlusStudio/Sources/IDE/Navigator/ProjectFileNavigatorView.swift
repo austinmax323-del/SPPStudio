@@ -38,13 +38,18 @@ struct ProjectFileNavigatorView: View {
 
     private var emptyState: some View {
         VStack(spacing: 10) {
-            Image(systemName: "folder.badge.questionmark")
-                .font(.largeTitle)
-                .foregroundStyle(.tertiary)
-            Text("Open a project to see files")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+            Image(systemName: "folder")
+                .font(.system(size: 26, weight: .thin))
+                .foregroundStyle(Color(white: 0.28))
+            VStack(spacing: 3) {
+                Text("No Project Open")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color(white: 0.32))
+                Text("Open or create a project\nto browse its files.")
+                    .font(IDETheme.Typography.caption)
+                    .foregroundStyle(Color(white: 0.26))
+                    .multilineTextAlignment(.center)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()

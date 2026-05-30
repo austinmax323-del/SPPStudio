@@ -36,7 +36,7 @@ struct InspectorView: View {
 
     private var panelHeader: some View {
         HStack(spacing: 7) {
-            Image(systemName: "info.circle")
+            Image(systemName: "sidebar.right")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(Color(white: 0.36))
             Text("Inspector")

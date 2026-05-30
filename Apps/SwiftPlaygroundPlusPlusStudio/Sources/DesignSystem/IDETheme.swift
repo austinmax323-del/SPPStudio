@@ -63,8 +63,8 @@ enum IDETheme {
     enum Layout {
         static let tabBarHeight:     CGFloat = 30
         static let editorTabHeight:  CGFloat = 33
-        static let panelTitleHeight: CGFloat = 32
-        static let rowVertical:      CGFloat = 6
+        static let panelTitleHeight: CGFloat = 34
+        static let rowVertical:      CGFloat = 7
         static let rowVerticalTight: CGFloat = 5
         static let panelPadding:     CGFloat = 12
         static let cardRadius:       CGFloat = 7
