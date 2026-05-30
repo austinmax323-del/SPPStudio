@@ -102,7 +102,7 @@ unresolved_regressions() {
       gsub(/^ +| +$/, "", status)
       if (status != "Fixed") print $0
     }
-  ' "$VAULT_DIR/Regressions/regression-tracker.md" || true
+  ' "$VAULT_DIR/50_RuntimeOps/Regressions/regression-tracker.md" || true
 }
 
 unresolved_regression_summary() {
@@ -117,17 +117,17 @@ unresolved_regression_summary() {
 
 latest_build() {
   require_vault
-  grep "^| 20" "$VAULT_DIR/BuildNotes/build-validation-log.md" | tail -1 || echo "No build validation rows found."
+  grep "^| 20" "$VAULT_DIR/60_DeliveryValidation/BuildNotes/build-validation-log.md" | tail -1 || echo "No build validation rows found."
 }
 
 current_milestone() {
   require_vault
-  grep -m 1 "^## Current:" "$VAULT_DIR/Milestones/active-milestone-dashboard.md" | sed 's/^## Current: //' || echo "Unknown milestone"
+  grep -m 1 "^## Current:" "$VAULT_DIR/70_SessionContinuity/Milestones/active-milestone-dashboard.md" | sed 's/^## Current: //' || echo "Unknown milestone"
 }
 
 active_subsystem() {
   require_vault
-  grep -m 1 "^- Active engineering target:" "$VAULT_DIR/ImplementationLog/active-implementation.md" | sed 's/^- Active engineering target: //' || echo "Unknown subsystem"
+  grep -m 1 "^- Active engineering target:" "$VAULT_DIR/70_SessionContinuity/ImplementationLog/active-implementation.md" | sed 's/^- Active engineering target: //' || echo "Unknown subsystem"
 }
 
 high_severity_regressions() {
@@ -140,7 +140,7 @@ high_severity_regressions() {
       gsub(/^ +| +$/, "", status)
       if (status != "Fixed" && (severity == "High" || severity == "Critical")) print $0
     }
-  ' "$VAULT_DIR/Regressions/regression-tracker.md" || true
+  ' "$VAULT_DIR/50_RuntimeOps/Regressions/regression-tracker.md" || true
 }
 
 high_severity_regression_summary() {
@@ -155,7 +155,7 @@ high_severity_regression_summary() {
 
 active_runtime_issue_rows() {
   require_vault
-  grep "^- 20[0-9][0-9]-" "$VAULT_DIR/RuntimeIssues/editor-runtime-issues.md" | tail -8 || true
+  grep "^- 20[0-9][0-9]-" "$VAULT_DIR/50_RuntimeOps/RuntimeIssues/editor-runtime-issues.md" | tail -8 || true
 }
 
 active_runtime_issues() {
@@ -170,7 +170,7 @@ active_runtime_issues() {
 
 current_focus() {
   require_vault
-  grep -m 1 "^## Sprint Goal" -A1 "$VAULT_DIR/Sprints/current-sprint.md" | tail -1
+  grep -m 1 "^## Sprint Goal" -A1 "$VAULT_DIR/70_SessionContinuity/Sprints/current-sprint.md" | tail -1
 }
 
 editor_invariant_risks() {
@@ -1305,7 +1305,7 @@ EOF
 write_session_state() {
   require_vault
   local focus subsystem build milestone next_action open_regressions high_regressions runtime_count
-  focus="$(grep -m 1 "^## Sprint Goal" -A1 "$VAULT_DIR/Sprints/current-sprint.md" | tail -1)"
+  focus="$(grep -m 1 "^## Sprint Goal" -A1 "$VAULT_DIR/70_SessionContinuity/Sprints/current-sprint.md" | tail -1)"
   subsystem="$(active_subsystem)"
   build="$(latest_build)"
   milestone="$(current_milestone)"
@@ -1409,7 +1409,7 @@ restore() {
     echo "- Date: $TODAY"
     echo "- Repo: $ROOT_DIR"
     echo "- Vault: $VAULT_DIR"
-    echo "- Sprint: SPPStudioDocs/Sprints/current-sprint.md"
+    echo "- Sprint: SPPStudioDocs/70_SessionContinuity/Sprints/current-sprint.md"
     echo "- Active implementation: SPPStudioDocs/ImplementationLog/active-implementation.md"
     echo "- Regressions: SPPStudioDocs/Regressions/regression-tracker.md"
     echo "- Unresolved bugs: SPPStudioDocs/Issues/unresolved-bugs.md"
@@ -1429,7 +1429,7 @@ restore() {
     echo "- SPPStudioDocs/Home.md"
     echo "- SPPStudioDocs/00_CommandCenter/Engineering Dashboard.md"
     echo "- SPPStudioDocs/00_CommandCenter/Current Operating State.md"
-    echo "- SPPStudioDocs/Sprints/current-sprint.md"
+    echo "- SPPStudioDocs/70_SessionContinuity/Sprints/current-sprint.md"
     echo "- SPPStudioDocs/Architecture Contracts.md"
     echo "- SPPStudioDocs/Editor Invariants.md"
     echo "- SPPStudioDocs/Known Failure Modes.md"
@@ -1470,7 +1470,7 @@ status() {
   fi
   echo ""
   echo "Current sprint"
-  sed -n '1,120p' "$VAULT_DIR/Sprints/current-sprint.md"
+  sed -n '1,120p' "$VAULT_DIR/70_SessionContinuity/Sprints/current-sprint.md"
   echo ""
   echo "Current milestone"
   current_milestone
@@ -1496,7 +1496,7 @@ status() {
   next_task
   echo ""
   echo "Active implementation"
-  sed -n '1,120p' "$VAULT_DIR/ImplementationLog/active-implementation.md"
+  sed -n '1,120p' "$VAULT_DIR/70_SessionContinuity/ImplementationLog/active-implementation.md"
 }
 
 summary() {
@@ -1522,10 +1522,10 @@ summary() {
     echo "- See [[Issues/unresolved-bugs]] and [[Regressions/regression-tracker]]."
     echo ""
     echo "## Next Session"
-    echo "- Continue from [[Sprints/current-sprint]]."
+    echo "- Continue from [[70_SessionContinuity/Sprints/current-sprint]]."
   } >"$file"
 
-  append_line "$VAULT_DIR/ImplementationLog/active-implementation.md" "- $TODAY: Created session summary [[SessionSummaries/$TODAY-$slug]]."
+  append_line "$VAULT_DIR/70_SessionContinuity/ImplementationLog/active-implementation.md" "- $TODAY: Created session summary [[SessionSummaries/$TODAY-$slug]]."
   echo "Created $file"
 }
 
@@ -1535,9 +1535,9 @@ regression() {
   local severity="${2:-Medium}"
   local symptom="${3:-No symptom provided}"
   local count id
-  count="$(grep -c "^| REG-$TODAY" "$VAULT_DIR/Regressions/regression-tracker.md" || true)"
+  count="$(grep -c "^| REG-$TODAY" "$VAULT_DIR/50_RuntimeOps/Regressions/regression-tracker.md" || true)"
   id="REG-$TODAY-$(printf "%03d" "$((count + 1))")"
-  append_line "$VAULT_DIR/Regressions/regression-tracker.md" "| $id | $area | $severity | Open | $TODAY | Unassigned | $symptom |"
+  append_line "$VAULT_DIR/50_RuntimeOps/Regressions/regression-tracker.md" "| $id | $area | $severity | Open | $TODAY | Unassigned | $symptom |"
   append_line "$VAULT_DIR/Bugs/known-regressions.md" "- [ ] $id: $symptom"
   echo "Logged $id"
 }
@@ -1555,7 +1555,7 @@ runtime() {
   local area="${1:-Runtime}"
   local severity="${2:-High}"
   local symptom="${3:-No runtime symptom provided}"
-  append_line "$VAULT_DIR/RuntimeIssues/editor-runtime-issues.md" "- $TODAY [$severity] $area - $symptom"
+  append_line "$VAULT_DIR/50_RuntimeOps/RuntimeIssues/editor-runtime-issues.md" "- $TODAY [$severity] $area - $symptom"
   echo "Logged runtime issue"
 }
 
@@ -1587,8 +1587,8 @@ artifact() {
 milestone() {
   require_vault
   local title="${1:-Untitled milestone}"
-  append_line "$VAULT_DIR/Milestones/completed-milestones.md" "- $TODAY: $title"
-  append_line "$VAULT_DIR/ImplementationLog/active-implementation.md" "- $TODAY: Completed milestone: $title."
+  append_line "$VAULT_DIR/70_SessionContinuity/Milestones/completed-milestones.md" "- $TODAY: $title"
+  append_line "$VAULT_DIR/70_SessionContinuity/ImplementationLog/active-implementation.md" "- $TODAY: Completed milestone: $title."
   echo "Logged milestone"
 }
 
@@ -1597,7 +1597,7 @@ build_log() {
   local result="${1:-PASS}"
   local notes="${2:-no notes}"
   local target="${3:-SwiftPlaygroundPlusPlusStudio}"
-  local log_file="$VAULT_DIR/BuildNotes/build-validation-log.md"
+  local log_file="$VAULT_DIR/60_DeliveryValidation/BuildNotes/build-validation-log.md"
   local entry="| $TODAY | $result | $target | $notes |"
   # Append after the last table row (line starting with "| 20")
   if grep -q "^| 20" "$log_file" 2>/dev/null; then
@@ -1640,7 +1640,7 @@ handoff() {
     echo "## Verification"
     latest_build
   } >"$file"
-  append_line "$VAULT_DIR/ImplementationLog/active-implementation.md" "- $TODAY: Wrote handoff [[SessionSummaries/$TODAY-handoff]]."
+  append_line "$VAULT_DIR/70_SessionContinuity/ImplementationLog/active-implementation.md" "- $TODAY: Wrote handoff [[SessionSummaries/$TODAY-handoff]]."
   echo "Created $file"
 }
 
@@ -1667,8 +1667,8 @@ adr() {
 sprint_close() {
   require_vault
   local summary_text="${1:-Sprint closed}"
-  local history_file="$VAULT_DIR/Sprints/sprint-history.md"
-  local sprint_file="$VAULT_DIR/Sprints/current-sprint.md"
+  local history_file="$VAULT_DIR/70_SessionContinuity/Sprints/sprint-history.md"
+  local sprint_file="$VAULT_DIR/70_SessionContinuity/Sprints/current-sprint.md"
   {
     echo ""
     echo "## Sprint closed: $TODAY"
@@ -1678,7 +1678,7 @@ sprint_close() {
     echo ""
     echo "---"
   } >>"$history_file"
-  append_line "$VAULT_DIR/ImplementationLog/active-implementation.md" "- $TODAY: Sprint closed. $summary_text"
+  append_line "$VAULT_DIR/70_SessionContinuity/ImplementationLog/active-implementation.md" "- $TODAY: Sprint closed. $summary_text"
   echo "Sprint closed and logged to $history_file"
   echo "Update $sprint_file with the new sprint goal."
 }
