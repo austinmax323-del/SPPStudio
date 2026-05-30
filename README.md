@@ -1,74 +1,63 @@
 # SPPStudio
 
-A native macOS IDE for iOS and macOS jailbreak tweak development.
+**A native macOS IDE for Theos/Logos jailbreak tweak development.**
 
-**Status: Early preview — active development. Not feature-complete. Expect rough edges.**
+> **Status: early preview, active development.** The core IDE shell works — editor, file navigator, syntax highlighting, and integrated Theos builds. Editor intelligence (diagnostics, completion) is in progress. Device deployment is planned (M8). Not feature-complete; expect rough edges.
 
----
-
-## What this is
-
-SPPStudio (Swift Playground++ Studio) is a purpose-built native macOS IDE for writing, building, and deploying jailbreak tweaks. It targets the [Theos](https://theos.dev) build system and the [Logos](https://github.com/theos/logos) preprocessor.
-
-The goal is to give tweak developers a proper native workspace instead of the current default: a text editor, a terminal running `make`, and manual deployment over SSH.
-
-This is open-source infrastructure for the jailbreak development ecosystem. It is not finished. It is being built in the open.
+> **Screenshots:** not yet captured — see [Screenshots](#screenshots). To see the current build, clone the repo and run `./script/build_and_run.sh`.
 
 ---
 
-## Who this is for
+## Overview
+
+SPPStudio (Swift Playground++ Studio) is a native macOS application (SwiftUI + AppKit) for writing and building jailbreak tweaks, with on-device deployment on the roadmap. It targets the [Theos](https://theos.dev) build system and the [Logos](https://github.com/theos/logos) preprocessor.
+
+Most tweak development today happens in general-purpose editors that have no awareness of Theos project structure or Logos syntax. The typical loop is:
+
+1. Edit source in an editor with no Theos/Logos awareness
+2. Run `make package` in a separate terminal
+3. Read build errors in the terminal and map them back to source by hand
+4. Copy the resulting `.deb` to a device over SSH to test
+
+SPPStudio brings these steps into one native application: a Logos-aware editor, an integrated Theos build with streaming output, and — on the roadmap — inline diagnostics and on-device deployment. It is open-source infrastructure for the jailbreak development ecosystem, built in the open.
+
+---
+
+## Who it's for
 
 - iOS/macOS jailbreak developers writing Objective-C tweaks with Logos
 - Swift tweak developers using [Orion](https://orion.theos.dev)
 - Anyone working with the Theos toolchain who wants IDE-level tooling
 
-This is not a general-purpose IDE. It is focused on the specific requirements of tweak development: Logos syntax, rootless/rootful packaging, `make`-based builds, and eventually on-device deployment.
-
----
-
-## Why this exists
-
-Jailbreak tweak development has been largely frozen in tooling terms for years. The standard workflow is:
-
-1. Open source files in a general-purpose editor with no Theos awareness
-2. Run `make package` in a separate terminal
-3. Copy errors from terminal into editor manually
-4. SCP/SSH the resulting `.deb` to a device to test
-
-No IDE currently provides: Logos syntax highlighting, integrated Theos builds with inline diagnostics, device connection, or an understanding of the rootless/rootful packaging schemes.
-
-SPPStudio is an attempt to build that tooling as open-source infrastructure that the whole ecosystem can build on.
+This is not a general-purpose IDE. It is scoped to the specifics of tweak development: Logos syntax, rootless/rootful/rooted packaging, `make`-based builds, and eventually on-device deployment.
 
 ---
 
 ## Current state
 
-SPPStudio is in active development. The core IDE shell is functional. Editor intelligence and device integration are next.
-
 ### Working now
 
 - **Native macOS IDE layout** — three-pane `NavigationSplitView` (file navigator, editor, inspector) with a resizable build console
-- **Code editor** — `NSTextView`-backed with per-tab state preservation (undo history, caret position, scroll offset survive tab switching)
+- **Code editor** — `NSTextView`-backed, with per-tab state preservation (undo history, caret position, and scroll offset survive tab switching)
 - **Syntax highlighting** — Swift, Objective-C, Logos (`.xm`/`.x`), Makefile, plist
-- **File navigator** — tree view with inline rename, context menu (New File, New Folder, Rename, Delete), file type icons, collapse-state persistence
-- **Tab system** — multi-file editing with keyboard shortcuts (⌘S save, ⌘W close, ⌘[ / ⌘] tab navigation)
-- **Build system** — integrated `make package FINALPACKAGE=1` subprocess with real-time streaming output
+- **File navigator** — tree view with inline rename, context menu (New File, New Folder, Rename, Delete), file-type icons, collapse-state persistence
+- **Tab system** — multi-file editing with keyboard shortcuts (⌘S save, ⌘W close, ⌘[ / ⌘] navigation)
+- **Integrated build** — runs `make package FINALPACKAGE=1` as a subprocess with real-time streaming output and `.deb` detection
 - **Build console** — ANSI escape stripping, auto-scroll toggle, error/warning line color distinction
-- **Theos project scaffolding** — `SPPTheosKit` generates Makefile, control, and plist for new tweaks; rootless, rootful, and rooted packaging schemes
+- **Theos project scaffolding** — `SPPTheosKit` generates Makefile, control, and plist for new tweaks across rootless, rootful, and rooted schemes
 - **Project model** — `SPPProject` with file tree, versioning, bundle ID, and Theos configuration
 
-### In active development (M6 sprint)
+### In active development — M6: Editor intelligence
 
 - **Inline diagnostics** — `FileDiagnosticsStore` → editor consumers via `NSLayoutManager` temporary attributes (no permanent mutation of text storage)
-- **Gutter markers** — error/warning indicators in the line number ruler
-- **Code completion** — basic keyword and symbol suggestions, AppKit-native
-- **Find & Replace panel**
+- **Gutter markers** — error/warning indicators in the line-number ruler
+- **Code completion** — `NSTextView`-native keyword and symbol suggestions
 
 ### Planned (not started)
 
 | Milestone | Feature |
 |---|---|
-| M7 | sppctl CLI build integration, build config picker |
+| M7 | `sppctl` CLI build integration, build-config picker, Find & Replace panel |
 | M8 | `SPPDeviceKit` — connected device list and deployment |
 | M8 | `SPPSimulatorHost` — simulator attach and launch |
 | M9 | `SPPSourceIndexKit` — background source indexing, jump-to-symbol |
@@ -76,48 +65,55 @@ SPPStudio is in active development. The core IDE shell is functional. Editor int
 | M11 | `SPPRuntimeKit` — runtime log capture, console tab |
 | M11 | `SPPInstrumentationBridge` — profiling hooks |
 | Icebox | `SPPUIBuilderKit` — visual UI canvas |
-| Icebox | IPC-based live reload |
+| Icebox | `SPPIPCModels` — IPC-based live reload |
 
-See [ROADMAP.md](ROADMAP.md) for the full milestone list.
+See [ROADMAP.md](ROADMAP.md) for the full milestone list and [docs/current-status.md](docs/current-status.md) for per-subsystem status.
 
 ---
 
 ## Requirements
 
 - macOS 14 (Sonoma) or later
-- Xcode 15+ (for Swift toolchain)
+- Xcode 15+ (for the Swift toolchain)
 - [Theos](https://theos.dev/docs/installation) installed (required to build tweaks)
-
-Optional for the `jarvis` CLI tool:
-- Swift Package Manager (included with Xcode)
 
 ---
 
 ## Build and run
 
-Clone the repo and build the main application:
+Clone and build the main application:
 
 ```bash
-git clone https://github.com/<your-org>/SPPStudio.git
+git clone https://github.com/austinmax323-del/SPPStudio.git
 cd SPPStudio
 swift build --package-path Apps/SwiftPlaygroundPlusPlusStudio
 ```
 
-To stage a runnable `.app` bundle and launch it:
+Stage a runnable `.app` bundle and launch it:
 
 ```bash
 ./script/build_and_run.sh
 ```
 
-Or open the workspace in Xcode:
+Or open the workspace in Xcode and run the `SwiftPlaygroundPlusPlusStudio` scheme:
 
 ```bash
 open SPPStudio.xcworkspace
 ```
 
-Then build and run the `SwiftPlaygroundPlusPlusStudio` scheme.
+First compile takes roughly 45–60 seconds (11 packages + the app target); incremental builds are fast. If you hit a Swift version mismatch (`module compiled with Swift X cannot be imported by Swift Y`), clear stale artifacts with `rm -rf Apps/SwiftPlaygroundPlusPlusStudio/.build` and rebuild.
 
-The build takes roughly 45–60 seconds on first compile (11 packages + the app target). Incremental builds are fast.
+### Manual smoke test
+
+There is no automated test suite yet (see [docs/current-status.md](docs/current-status.md)). After building, verify the core editor invariants by hand:
+
+1. Launch the app (`./script/build_and_run.sh`).
+2. Open or create a Theos project (File → New Project, or File → Open on an existing project directory).
+3. Open two or more source files in tabs.
+4. Type in one tab, switch to another, and switch back — undo history, caret position, and scroll offset should each be preserved per tab.
+5. Trigger a build (⌘B) and confirm streaming output appears in the console.
+
+These checks exercise the most fragile part of the codebase: the pooled `NSTextView` architecture. See [docs/architecture.md](docs/architecture.md) for why it matters.
 
 ---
 
@@ -140,39 +136,39 @@ Packages/
   SPPInstrumentationBridge/         ← profiling bridge (planned)
   SPPUIBuilderKit/                  ← visual UI canvas (icebox)
 Tools/
-  sppctl/                           ← CLI for build and AI workflow operations
+  sppctl/                           ← CLI for build and project operations
   spp-obsidian-plugin/              ← custom Obsidian plugin for project state
 SPPStudioDocs/                      ← project documentation vault (Obsidian)
 script/                             ← build, run, and workspace automation scripts
+docs/                               ← architecture, status, and contributor docs
 ```
+
+See [docs/architecture.md](docs/architecture.md) for the package graph, data flow, and the editor invariants.
 
 ---
 
 ## Screenshots
 
-> Screenshots pending. The IDE is functional but UI polish is ongoing.
+_Not yet captured. Planned shots, in priority order:_
 
-To build and run the current state yourself:
+- [ ] Main three-pane window with a Logos tweak open (syntax highlighting visible)
+- [ ] Build console streaming `make package` output
+- [ ] New-project sheet showing Theos scheme selection
+- [ ] File navigator with context menu
 
-```bash
-./script/build_and_run.sh
-```
-
----
-
-## AI-assisted development workflow
-
-SPPStudio is developed using a local-first AI workflow: Claude Code for implementation, Codex for architecture review, and a custom CLI tool (`jarvis`) for task management and context assembly. The `SPPStudioDocs/` directory is an [Obsidian](https://obsidian.md) vault that serves as shared durable memory across sessions.
-
-The `AGENTS.md` and `PROJECT_CONTEXT.md` files at the repo root are the canonical context files for AI sessions. `SPPStudioDocs/30_AI_Coordination/` contains the coordination protocols. This workflow is documented here because it is an intentional part of the project, not because it is required to use or contribute to SPPStudio.
+To produce the current build yourself: `./script/build_and_run.sh`.
 
 ---
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+Contributions are welcome. The architecture has hard invariants — especially around the pooled `NSTextView` editor — that must be preserved, so read [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/architecture.md](docs/architecture.md) before opening a PR.
 
-The short version: contributions are welcome, but the architecture has hard invariants (especially around the `NSTextView` pool) that must be preserved. Read `CONTRIBUTING.md` and `docs/architecture.md` before sending a PR.
+---
+
+## Development workflow
+
+SPPStudio is built with a local-first, AI-assisted workflow (Claude Code for implementation, Codex for review), coordinated through a small CLI in `Tools/sppctl/` and an [Obsidian](https://obsidian.md) vault under `SPPStudioDocs/` used as durable project memory. None of this is required to build, run, or contribute to SPPStudio — it is internal development tooling. See `AGENTS.md` and `PROJECT_CONTEXT.md` for details.
 
 ---
 
