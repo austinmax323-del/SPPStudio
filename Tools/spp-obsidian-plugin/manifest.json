@@ -1,0 +1,10 @@
+{
+  "id": "spp-command-center",
+  "name": "SPP Command Center",
+  "version": "0.1.0",
+  "minAppVersion": "1.7.0",
+  "description": "Read-only native cockpit widgets for the SPPStudio Obsidian command center.",
+  "author": "SPPStudio",
+  "authorUrl": "",
+  "isDesktopOnly": true
+}

@@ -1,0 +1,16 @@
+{
+  "name": "spp-command-center",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Read-only native cockpit widgets for the SPPStudio Obsidian command center.",
+  "main": "main.js",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "build": "esbuild src/main.ts --bundle --external:obsidian --format=cjs --target=es2018 --outfile=main.js"
+  },
+  "devDependencies": {
+    "esbuild": "^0.21.5",
+    "obsidian": "^1.7.2",
+    "typescript": "^5.5.4"
+  }
+}

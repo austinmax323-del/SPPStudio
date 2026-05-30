@@ -18,6 +18,16 @@ SPPStudioDocs/.obsidian/types.json
 .claude/
 .codex/
 
+# --- Obsidian runtime state ---
+# The entire .obsidian/ directory is runtime/compiled state.
+# Custom plugin source lives in Tools/spp-obsidian-plugin/ instead.
+SPPStudioDocs/.obsidian/
+SPPStudioDocs/.claudian/
+
+# --- spp-obsidian-plugin build output and dependencies ---
+Tools/spp-obsidian-plugin/node_modules/
+Tools/spp-obsidian-plugin/dist/
+
 # --- Build artifacts ---
 .build/
 .swiftpm/

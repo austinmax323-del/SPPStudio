@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Workspace version="1.0">
+   <FileRef location="group:Apps/SwiftPlaygroundPlusPlusStudio"/>
+   <FileRef location="group:Apps/SPPSimulatorHost"/>
+   <FileRef location="group:Packages/SPPCore"/>
+   <FileRef location="group:Packages/SPPIPCModels"/>
+   <FileRef location="group:Packages/SPPSymbolKit"/>
+   <FileRef location="group:Packages/SPPRuntimeKit"/>
+   <FileRef location="group:Packages/SPPHookKit"/>
+   <FileRef location="group:Packages/SPPTheosKit"/>
+   <FileRef location="group:Packages/SPPExportKit"/>
+   <FileRef location="group:Packages/SPPUIBuilderKit"/>
+   <FileRef location="group:Packages/SPPInstrumentationBridge"/>
+   <FileRef location="group:Packages/SPPDeviceKit"/>
+   <FileRef location="group:Packages/SPPSourceIndexKit"/>
+   <FileRef location="group:Tools/sppctl"/>
+</Workspace>
