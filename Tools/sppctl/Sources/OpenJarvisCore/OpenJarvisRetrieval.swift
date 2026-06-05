@@ -69,7 +69,7 @@ public final class OpenJarvisRetrievalEngine {
             "/Queue/",
             "/SessionNotes/",
             "/Screenshots/",
-            "/VerificationArtifacts/",
+            "/60_DeliveryValidation/VerificationArtifacts/",
             "/Excalidraw/",
             "/Canvases/",
             ".codex-backup"

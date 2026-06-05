@@ -162,7 +162,7 @@ while IFS= read -r line; do
   if [ "$in_terms" -eq 1 ] && [ -n "$line" ]; then
     patterns+=("$line")
   fi
-done < "$VAULT_DIR/Known Bad Patterns.md"
+done < "$VAULT_DIR/20_ArchitectureMemory/Known Bad Patterns.md"
 
 scan_paths=(
   "Apps/SwiftPlaygroundPlusPlusStudio/Sources"
@@ -177,11 +177,11 @@ done
 
 echo ""
 echo "Architecture severity levels"
-sed -n '/## Severity Levels/,+6p' "$VAULT_DIR/Architecture Contracts.md"
+sed -n '/## Severity Levels/,+6p' "$VAULT_DIR/20_ArchitectureMemory/Architecture Contracts.md"
 
 echo ""
 echo "Editor invariants"
-sed -n '1,120p' "$VAULT_DIR/Editor Invariants.md"
+sed -n '1,120p' "$VAULT_DIR/20_ArchitectureMemory/Editor Invariants.md"
 
 echo ""
 echo "Unsafe-to-continue gate"
@@ -189,17 +189,17 @@ echo "Unsafe-to-continue gate"
 
 echo ""
 echo "Known failure modes"
-sed -n '1,220p' "$VAULT_DIR/Known Failure Modes.md"
+sed -n '1,220p' "$VAULT_DIR/20_ArchitectureMemory/Known Failure Modes.md"
 
 echo ""
 echo "Verification flows"
-sed -n '1,220p' "$VAULT_DIR/VerificationFlows/README.md"
+sed -n '1,220p' "$VAULT_DIR/60_DeliveryValidation/VerificationFlows/README.md"
 
 echo ""
 echo "Known bad patterns"
-sed -n '1,220p' "$VAULT_DIR/Known Bad Patterns.md"
+sed -n '1,220p' "$VAULT_DIR/20_ArchitectureMemory/Known Bad Patterns.md"
 
 echo ""
 echo "Suggested Codex review prompt"
-echo "Use SPPStudioDocs/AgentPrompts/review-latest-diff.md."
+echo "Use SPPStudioDocs/40_PromptEngineering/AgentPrompts/review-latest-diff.md."
 echo "Prioritize Critical and High findings. Treat pattern hits as review leads, not automatic failures."
