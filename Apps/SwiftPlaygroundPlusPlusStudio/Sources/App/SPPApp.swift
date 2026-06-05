@@ -14,7 +14,21 @@ struct SPPStudioApp: App {
         WindowGroup {
             IDEWindowView()
                 .environmentObject(appEnv)
-                .task { await appEnv.bootstrap() }
+                .task {
+                    await appEnv.bootstrap()
+                    for url in startupProjectURLs() {
+                        await openProject(url)
+                    }
+                    for url in AppDelegate.drainPendingProjectURLs() {
+                        await openProject(url)
+                    }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .sppOpenProjectRequested)) { notification in
+                    guard let url = notification.object as? URL else { return }
+                    Task { @MainActor in
+                        await openProject(url)
+                    }
+                }
         }
         .defaultSize(width: 1280, height: 800)
         .windowStyle(.titleBar)
@@ -25,6 +39,11 @@ struct SPPStudioApp: App {
                     NSApp.sendAction(#selector(AppDelegate.newProjectAction(_:)), to: nil, from: nil)
                 }
                 .keyboardShortcut("n", modifiers: [.command])
+
+                Button("Open Project…") {
+                    NSApp.sendAction(#selector(AppDelegate.openProjectAction(_:)), to: nil, from: nil)
+                }
+                .keyboardShortcut("o", modifiers: [.command])
             }
             CommandMenu("Debug") {
                 Button("Dump Runtime Invariants") {
@@ -38,6 +57,22 @@ struct SPPStudioApp: App {
 
         Settings {
             SettingsView()
+        }
+    }
+
+    @MainActor
+    private func openProject(_ url: URL) async {
+        do {
+            try await appEnv.projectService.openProject(at: url)
+        } catch {
+            appEnv.logger.error("Failed to open project from system open event: \(error.localizedDescription)")
+        }
+    }
+
+    private func startupProjectURLs() -> [URL] {
+        CommandLine.arguments.dropFirst().compactMap { argument in
+            guard argument.hasSuffix(".sppproject") else { return nil }
+            return URL(fileURLWithPath: argument).standardizedFileURL
         }
     }
 }
@@ -116,6 +151,7 @@ private struct AboutSettingsTab: View {
 // MARK: - App Delegate
 
 class AppDelegate: NSObject, NSApplicationDelegate {
+    private static var pendingProjectURLs: [URL] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -125,8 +161,41 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func newProjectAction(_ sender: Any?) {
         NotificationCenter.default.post(name: .sppNewProjectRequested, object: nil)
     }
+
+    @objc func openProjectAction(_ sender: Any?) {
+        let panel = NSOpenPanel()
+        panel.title = "Open Project"
+        panel.message = "Choose a Swift Playground++ Studio project"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.treatsFilePackagesAsDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        _ = application(NSApp, openFile: url.path)
+    }
+
+    func application(_ sender: NSApplication, openFile filename: String) -> Bool {
+        let url = URL(fileURLWithPath: filename)
+        Self.pendingProjectURLs.append(url)
+        NotificationCenter.default.post(name: .sppOpenProjectRequested, object: url)
+        return true
+    }
+
+    func application(_ sender: NSApplication, openFiles filenames: [String]) {
+        for filename in filenames {
+            _ = application(sender, openFile: filename)
+        }
+        sender.reply(toOpenOrPrint: .success)
+    }
+
+    static func drainPendingProjectURLs() -> [URL] {
+        let urls = pendingProjectURLs
+        pendingProjectURLs.removeAll()
+        return urls
+    }
 }
 
 extension Notification.Name {
     static let sppNewProjectRequested = Notification.Name("SPPStudio.NewProjectRequested")
+    static let sppOpenProjectRequested = Notification.Name("SPPStudio.OpenProjectRequested")
 }

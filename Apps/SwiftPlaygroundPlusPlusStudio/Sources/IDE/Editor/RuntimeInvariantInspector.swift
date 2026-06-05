@@ -163,6 +163,7 @@ enum RuntimeInvariantInspector {
             lines.append("- text-storage: \(identity(textStorage))")
             lines.append("- layout-manager-text-storage-matches: \(relationshipMatches(layoutManager: layoutManager, textStorage: textStorage))")
             lines.append("- text-storage-layout-manager-count: \(textStorage?.layoutManagers.count ?? 0)")
+            appendTextRenderingState(to: &lines, textView: tv, scrollView: active.scrollView)
         } else {
             lines.append("- none")
         }
@@ -384,8 +385,108 @@ enum RuntimeInvariantInspector {
         }
     }
 
+    private static func appendTextRenderingState(to lines: inout [String], textView: NSTextView, scrollView: NSScrollView?) {
+        let layoutManager = textView.layoutManager
+        let textContainer = textView.textContainer
+        let textStorage = textView.textStorage
+        let glyphCount = layoutManager?.numberOfGlyphs ?? 0
+        let visibleGlyphRange: NSRange
+        if let layoutManager, let textContainer {
+            let origin = textView.textContainerOrigin
+            let containerVisibleRect = textView.visibleRect.offsetBy(dx: -origin.x, dy: -origin.y)
+            visibleGlyphRange = layoutManager.glyphRange(forBoundingRect: containerVisibleRect, in: textContainer)
+        } else {
+            visibleGlyphRange = NSRange(location: NSNotFound, length: 0)
+        }
+
+        lines.append("- text-view-frame: \(rectDescription(textView.frame))")
+        lines.append("- text-view-bounds: \(rectDescription(textView.bounds))")
+        lines.append("- text-view-visible-rect: \(rectDescription(textView.visibleRect))")
+        lines.append("- text-view-hidden: \(textView.isHidden)")
+        lines.append("- text-view-alpha: \(String(format: "%.3f", textView.alphaValue))")
+        lines.append("- text-view-window-present: \(textView.window != nil)")
+        lines.append("- text-view-wants-layer: \(textView.wantsLayer)")
+        lines.append("- text-view-layer-present: \(textView.layer != nil)")
+        lines.append("- text-view-background-alpha: \(String(format: "%.3f", textView.backgroundColor.alphaComponent))")
+        lines.append("- text-view-draws-background: \(textView.drawsBackground)")
+        lines.append("- text-view-text-color: \(colorDescription(textView.textColor))")
+        if let codeTextView = textView as? CodeTextView {
+            lines.append("- text-view-draw-count: \(codeTextView.drawCount)")
+            lines.append("- text-view-last-dirty-rect: \(rectDescription(codeTextView.lastDirtyRect))")
+        }
+        lines.append("- text-container-origin: \(pointDescription(textView.textContainerOrigin))")
+        lines.append("- text-container-inset: \(sizeDescription(textView.textContainerInset))")
+        lines.append("- text-container-size: \(sizeDescription(textContainer?.containerSize ?? .zero))")
+        lines.append("- text-container-line-fragment-padding: \(String(format: "%.3f", textContainer?.lineFragmentPadding ?? 0))")
+        lines.append("- layout-manager-glyph-count: \(glyphCount)")
+        lines.append("- visible-glyph-range: \(rangeDescription(visibleGlyphRange))")
+        if let layoutManager, let textContainer, glyphCount > 0 {
+            let firstRange = NSRange(location: 0, length: min(glyphCount, 1))
+            lines.append("- first-glyph-bounding-rect: \(rectDescription(layoutManager.boundingRect(forGlyphRange: firstRange, in: textContainer)))")
+            if visibleGlyphRange.location != NSNotFound, visibleGlyphRange.length > 0 {
+                lines.append("- first-visible-glyph-bounding-rect: \(rectDescription(layoutManager.boundingRect(forGlyphRange: NSRange(location: visibleGlyphRange.location, length: 1), in: textContainer)))")
+            }
+        }
+        if let textStorage, textStorage.length > 0 {
+            let attrs = textStorage.attributes(at: 0, effectiveRange: nil)
+            lines.append("- first-char-font: \(attrs[.font].map { String(describing: $0) } ?? "none")")
+            lines.append("- first-char-foreground: \(colorDescription(attrs[.foregroundColor] as? NSColor))")
+        }
+        if let scrollView {
+            lines.append("- scroll-view-frame: \(rectDescription(scrollView.frame))")
+            lines.append("- scroll-view-bounds: \(rectDescription(scrollView.bounds))")
+            lines.append("- scroll-view-hidden: \(scrollView.isHidden)")
+            lines.append("- scroll-view-alpha: \(String(format: "%.3f", scrollView.alphaValue))")
+            lines.append("- scroll-view-wants-layer: \(scrollView.wantsLayer)")
+            lines.append("- scroll-view-layer-present: \(scrollView.layer != nil)")
+            lines.append("- clip-view-frame: \(rectDescription(scrollView.contentView.frame))")
+            lines.append("- clip-view-bounds: \(rectDescription(scrollView.contentView.bounds))")
+            lines.append("- document-visible-rect: \(rectDescription(scrollView.documentVisibleRect))")
+            lines.append("- document-view-matches-text-view: \(scrollView.documentView === textView)")
+        }
+        lines.append("- superview-chain: \(superviewChain(from: textView))")
+    }
+
     private static func identity(_ object: AnyObject?) -> String {
         object.map { String(describing: ObjectIdentifier($0)) } ?? "none"
+    }
+
+    private static func rectDescription(_ rect: NSRect) -> String {
+        "x=\(number(rect.origin.x)) y=\(number(rect.origin.y)) w=\(number(rect.size.width)) h=\(number(rect.size.height))"
+    }
+
+    private static func pointDescription(_ point: NSPoint) -> String {
+        "x=\(number(point.x)) y=\(number(point.y))"
+    }
+
+    private static func sizeDescription(_ size: NSSize) -> String {
+        "w=\(number(size.width)) h=\(number(size.height))"
+    }
+
+    private static func rangeDescription(_ range: NSRange) -> String {
+        range.location == NSNotFound ? "not-found:0" : "\(range.location):\(range.length)"
+    }
+
+    private static func colorDescription(_ color: NSColor?) -> String {
+        guard let color else { return "none" }
+        let rgb = color.usingColorSpace(.deviceRGB) ?? color
+        return "r=\(number(rgb.redComponent)) g=\(number(rgb.greenComponent)) b=\(number(rgb.blueComponent)) a=\(number(rgb.alphaComponent))"
+    }
+
+    private static func superviewChain(from view: NSView) -> String {
+        var pieces: [String] = []
+        var current: NSView? = view
+        while let view = current {
+            pieces.append("\(String(describing: type(of: view)))(hidden=\(view.isHidden),alpha=\(number(view.alphaValue)),layer=\(view.layer != nil),wantsLayer=\(view.wantsLayer),frame=\(rectDescription(view.frame)))")
+            current = view.superview
+        }
+        return pieces.joined(separator: " <- ")
+    }
+
+    private static func number(_ value: CGFloat) -> String {
+        if value == CGFloat.greatestFiniteMagnitude { return "greatestFiniteMagnitude" }
+        if !value.isFinite { return String(describing: value) }
+        return String(format: "%.3f", value)
     }
 
     private static func continuityStatus(_ prior: String?, _ current: String) -> String {

@@ -52,11 +52,16 @@ struct EditorAreaView: View {
         .onReceive(appEnv.eventBus.publisher(for: FileSelectedEvent.self)) { event in
             openOrFocusTab(fileID: event.fileID)
         }
+        .onAppear {
+            openFirstProjectFileIfNeeded()
+        }
         .onChange(of: appEnv.currentProject?.id) { _, _ in
             resetEditorTabs()
+            openFirstProjectFileIfNeeded()
         }
         .onChange(of: projectFileSignature) { _, _ in
             pruneInvalidTabs()
+            openFirstProjectFileIfNeeded()
         }
         .background {
             ZStack {
@@ -173,6 +178,7 @@ struct EditorAreaView: View {
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -377,6 +383,17 @@ struct EditorAreaView: View {
         activeTabID = tab.id
     }
 
+    private func openFirstProjectFileIfNeeded() {
+        guard activeTabID == nil,
+              let project = appEnv.currentProject,
+              let firstFile = project.files
+                .flatMap({ $0.allFiles() })
+                .first(where: { !$0.isDirectory })
+        else { return }
+
+        openOrFocusTab(fileID: firstFile.id)
+    }
+
     private func closeTab(_ tab: EditorTab) {
         guard let idx = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
         tabs.remove(at: idx)
@@ -545,6 +562,150 @@ final class CodeTextView: NSTextView {
     var bracketMatchRanges: (NSRange, NSRange)? {
         didSet { needsDisplay = true }
     }
+    weak var renderOverlay: CodeTextRenderOverlayView?
+    private(set) var drawCount = 0
+    private(set) var lastDirtyRect = NSRect.zero
+
+    override var isOpaque: Bool { true }
+
+    override var wantsLayer: Bool {
+        get { false }
+        set { }
+    }
+
+    override var wantsUpdateLayer: Bool { false }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        needsDisplay = true
+        layer?.needsDisplay()
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        drawCount += 1
+        lastDirtyRect = dirtyRect
+        backgroundColor.setFill()
+        dirtyRect.fill()
+
+        guard let layoutManager, let textContainer else { return }
+        layoutManager.ensureLayout(for: textContainer)
+
+        let origin = textContainerOrigin
+        let containerDirtyRect = dirtyRect.offsetBy(dx: -origin.x, dy: -origin.y)
+        let glyphRange = layoutManager.glyphRange(forBoundingRect: containerDirtyRect, in: textContainer)
+        guard glyphRange.location != NSNotFound, glyphRange.length > 0 else { return }
+
+        layoutManager.drawBackground(forGlyphRange: glyphRange, at: origin)
+        layoutManager.drawGlyphs(forGlyphRange: glyphRange, at: origin)
+    }
+}
+
+final class CodeTextRenderOverlayView: NSView {
+    weak var textView: CodeTextView?
+    weak var scrollView: NSScrollView?
+
+    init(textView: CodeTextView, scrollView: NSScrollView) {
+        self.textView = textView
+        self.scrollView = scrollView
+        super.init(frame: .zero)
+        wantsLayer = false
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override var isFlipped: Bool { true }
+
+    override var wantsLayer: Bool {
+        get { false }
+        set { }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard
+            let textView,
+            let scrollView,
+            let storage = textView.textStorage,
+            let layoutManager = textView.layoutManager,
+            let textContainer = textView.textContainer
+        else { return }
+
+        layoutManager.ensureLayout(for: textContainer)
+        let origin = textView.textContainerOrigin
+        let clipOrigin = scrollView.contentView.bounds.origin
+        let containerDirtyRect = dirtyRect
+            .offsetBy(dx: clipOrigin.x - origin.x, dy: clipOrigin.y - origin.y)
+        let glyphRange = layoutManager.glyphRange(forBoundingRect: containerDirtyRect, in: textContainer)
+        guard glyphRange.location != NSNotFound, glyphRange.length > 0 else { return }
+
+        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { lineRect, usedRect, _, lineGlyphRange, _ in
+            var charRange = layoutManager.characterRange(forGlyphRange: lineGlyphRange, actualGlyphRange: nil)
+            guard charRange.length > 0, NSMaxRange(charRange) <= storage.length else { return }
+
+            let source = storage.string as NSString
+            while charRange.length > 0 {
+                let lastIndex = charRange.location + charRange.length - 1
+                let last = source.character(at: lastIndex)
+                if last == 10 || last == 13 {
+                    charRange.length -= 1
+                } else {
+                    break
+                }
+            }
+            guard charRange.length > 0 else { return }
+
+            let renderedLine = NSMutableAttributedString(attributedString: storage.attributedSubstring(from: charRange))
+            renderedLine.removeAttribute(.backgroundColor, range: NSRange(location: 0, length: renderedLine.length))
+            renderedLine.draw(at: NSPoint(
+                x: origin.x + usedRect.minX - clipOrigin.x,
+                y: origin.y + lineRect.minY - clipOrigin.y
+            ))
+        }
+    }
+}
+
+final class CodeClipView: NSClipView {
+    override var wantsLayer: Bool {
+        get { false }
+        set { }
+    }
+}
+
+final class CodeScrollView: NSScrollView {
+    override var wantsLayer: Bool {
+        get { false }
+        set { }
+    }
+}
+
+final class CodeEditorContainerView: NSView {
+    let scrollView: CodeScrollView
+    let renderOverlay: CodeTextRenderOverlayView
+
+    init(scrollView: CodeScrollView, renderOverlay: CodeTextRenderOverlayView) {
+        self.scrollView = scrollView
+        self.renderOverlay = renderOverlay
+        super.init(frame: .zero)
+        wantsLayer = false
+        addSubview(scrollView)
+        addSubview(renderOverlay, positioned: .above, relativeTo: scrollView)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override var wantsLayer: Bool {
+        get { false }
+        set { }
+    }
+
+    override func layout() {
+        super.layout()
+        scrollView.frame = bounds
+        renderOverlay.frame = bounds
+        scrollView.tile()
+        renderOverlay.needsDisplay = true
+    }
 }
 
 // MARK: - Code Editor (NSTextView + ruler + syntax highlighting)
@@ -559,7 +720,7 @@ struct CodeEditorView: NSViewRepresentable {
     @Binding var selection: NSRange
     @Binding var scrollOffset: NSPoint
 
-    func makeNSView(context: Context) -> NSScrollView {
+    func makeNSView(context: Context) -> CodeEditorContainerView {
         let tv = CodeTextView(
             frame: NSRect(x: 0, y: 0, width: 800, height: 600)
         )
@@ -599,14 +760,14 @@ struct CodeEditorView: NSViewRepresentable {
             .foregroundColor: NSColor(white: 0.97, alpha: 1)
         ]
 
-        // Keep the text container tied to the visible editor width. The previous
-        // unbounded horizontal container intermittently laid glyphs outside the
-        // visible rect while accessibility still exposed the text.
+        // Keep the text container tied to the visible editor width. The text view
+        // stays vertically resizable; adding .height here fights the layout manager
+        // and can leave glyphs laid out but not redrawn.
         tv.isHorizontallyResizable = false
         tv.isVerticallyResizable   = true
         tv.minSize                 = .zero
         tv.maxSize                 = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        tv.autoresizingMask        = [.width, .height]
+        tv.autoresizingMask        = [.width]
 
         // Tab width: 4 spaces
         let tabFont  = NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular)
@@ -617,9 +778,13 @@ struct CodeEditorView: NSViewRepresentable {
         tv.defaultParagraphStyle    = tabStyle
         tv.typingAttributes[.paragraphStyle] = tabStyle
 
-        // Scroll view
-        let scrollView = NSScrollView()
+        // Plain scroll view. SwiftUI owns the outer frame; this subtree renders
+        // through AppKit's normal draw pipeline.
+        let scrollView = CodeScrollView()
+        scrollView.contentView = CodeClipView()
         scrollView.documentView               = tv
+        let renderOverlay = CodeTextRenderOverlayView(textView: tv, scrollView: scrollView)
+        tv.renderOverlay = renderOverlay
         scrollView.hasVerticalScroller        = true
         scrollView.hasHorizontalScroller      = false
         scrollView.autohidesScrollers         = true
@@ -650,13 +815,19 @@ struct CodeEditorView: NSViewRepresentable {
             scrollView: scrollView
         )
 
-        return scrollView
+        return CodeEditorContainerView(scrollView: scrollView, renderOverlay: renderOverlay)
     }
 
-    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+    func updateNSView(_ container: CodeEditorContainerView, context: Context) {
         context.coordinator.parent = self
+        let scrollView = container.scrollView
+        container.isHidden = !isActive
         scrollView.isHidden = !isActive
+        container.needsLayout = true
         guard isActive, let tv = scrollView.documentView as? CodeTextView else { return }
+        if Self.syncTextLayout(tv, in: scrollView) {
+            DispatchQueue.main.async { [weak tv] in tv?.display() }
+        }
         RuntimeInvariantInspector.updateActive(tabID: tabID, fileID: fileID, selection: tv.selectedRange())
 
         if context.coordinator.lastRenderedText != text {
@@ -671,7 +842,7 @@ struct CodeEditorView: NSViewRepresentable {
             tv.textColor = NSColor(white: 0.82, alpha: 1)
             tv.typingAttributes = Self.editorTypingAttributes()
             tv.setSelectedRange(clamped(selection, in: text))
-            tv.layoutManager?.ensureLayout(for: tv.textContainer!)
+            Self.syncTextLayout(tv, in: scrollView, forceDisplay: true)
             tv.undoManager?.removeAllActions()
             context.coordinator.lastRenderedText = text
             context.coordinator.isApplyingExternalUpdate = false
@@ -682,10 +853,10 @@ struct CodeEditorView: NSViewRepresentable {
             // On first open the scroll view frame may still be zero; the async
             // dispatch ensures the text container has its final width before we
             // force the glyph layout and redraw.
-            DispatchQueue.main.async { [weak tv] in
-                guard let tv else { return }
-                tv.layoutManager?.ensureLayout(for: tv.textContainer!)
-                tv.needsDisplay = true
+            DispatchQueue.main.async { [weak scrollView, weak tv] in
+                guard let scrollView, let tv else { return }
+                Self.syncTextLayout(tv, in: scrollView, forceDisplay: true)
+                tv.display()
             }
         }
 
@@ -696,12 +867,52 @@ struct CodeEditorView: NSViewRepresentable {
         if scrollView.contentView.bounds.origin != scrollOffset {
             DispatchQueue.main.async {
                 context.coordinator.isRestoringScroll = true
-                scrollView.contentView.layoutSubtreeIfNeeded()
                 scrollView.contentView.scroll(to: scrollOffset)
                 scrollView.reflectScrolledClipView(scrollView.contentView)
                 context.coordinator.isRestoringScroll = false
             }
         }
+    }
+
+    @discardableResult
+    private static func syncTextLayout(_ tv: CodeTextView, in scrollView: NSScrollView, forceDisplay: Bool = false) -> Bool {
+        let clipWidth = scrollView.contentView.bounds.width
+        guard clipWidth.isFinite, clipWidth > 0 else { return false }
+
+        var didChangeLayout = false
+        let textViewWidth = max(1, clipWidth)
+        if abs(tv.frame.width - textViewWidth) > 0.5 {
+            tv.setFrameSize(NSSize(
+                width: textViewWidth,
+                height: max(tv.frame.height, scrollView.contentView.bounds.height)
+            ))
+            didChangeLayout = true
+        }
+
+        if let container = tv.textContainer {
+            container.widthTracksTextView = true
+            container.heightTracksTextView = false
+            if container.containerSize.height != CGFloat.greatestFiniteMagnitude {
+                container.containerSize = NSSize(
+                    width: container.containerSize.width,
+                    height: CGFloat.greatestFiniteMagnitude
+                )
+                didChangeLayout = true
+            }
+        }
+
+        guard didChangeLayout || forceDisplay else { return false }
+
+        let fullRange = NSRange(location: 0, length: (tv.string as NSString).length)
+        tv.layoutManager?.invalidateLayout(forCharacterRange: fullRange, actualCharacterRange: nil)
+        tv.layoutManager?.invalidateDisplay(forCharacterRange: fullRange)
+        if let textContainer = tv.textContainer {
+            tv.layoutManager?.ensureLayout(for: textContainer)
+        }
+        tv.needsDisplay = true
+        tv.renderOverlay?.frame = tv.frame
+        tv.renderOverlay?.needsDisplay = true
+        return true
     }
 
     private func clamped(_ range: NSRange, in source: String) -> NSRange {
@@ -730,7 +941,7 @@ struct CodeEditorView: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
-    static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
+    static func dismantleNSView(_ nsView: CodeEditorContainerView, coordinator: Coordinator) {
         NotificationCenter.default.removeObserver(coordinator)
         RuntimeInvariantInspector.unregister(tabID: coordinator.parent.tabID)
     }
@@ -756,6 +967,7 @@ struct CodeEditorView: NSViewRepresentable {
                 SyntaxHighlighter.apply(to: storage, contentType: parent.contentType)
                 tv.setSelectedRange(selectedRange)
             }
+            (tv as? CodeTextView)?.renderOverlay?.needsDisplay = true
             parent.selection = tv.selectedRange()
             RuntimeInvariantInspector.recordSelection(tabID: parent.tabID, fileID: parent.fileID, selection: parent.selection)
             updateEditorChrome(tv)
@@ -767,12 +979,15 @@ struct CodeEditorView: NSViewRepresentable {
             parent.selection = tv.selectedRange()
             RuntimeInvariantInspector.recordSelection(tabID: parent.tabID, fileID: parent.fileID, selection: parent.selection)
             updateEditorChrome(tv)
+            (tv as? CodeTextView)?.renderOverlay?.needsDisplay = true
         }
 
         @objc func scrollViewDidScroll(_ notification: Notification) {
             guard !isRestoringScroll else { return }
             guard let clipView = notification.object as? NSClipView else { return }
             parent.scrollOffset = clipView.bounds.origin
+            (clipView.documentView as? CodeTextView)?.renderOverlay?.needsDisplay = true
+            ruler?.needsDisplay = true
         }
 
         func updateEditorChrome(_ tv: NSTextView) {
