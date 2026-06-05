@@ -1,28 +1,17 @@
 # === SPPStudio .gitignore ===
-# Created as part of an AI-setup hardening pass. See SETUP_REVIEW.md.
+
+# --- Obsidian vault (private — never commit) ---
+# The vault lives at /path/to/Obsidian/ and is symlinked here.
+# Neither the symlink nor any vault content belongs in the public repo.
+SPPStudioDocs
+SPPStudioDocs/
 
 # --- Secrets (do NOT commit) ---
-# Obsidian Local REST API bearer token lives here. Use .mcp.json.example as the
-# committed template and keep the real token out of version control.
 .mcp.json
-# Obsidian Local REST API plugin stores the same apiKey in its data.json.
-SPPStudioDocs/.obsidian/plugins/*/data.json
-SPPStudioDocs/.obsidian/workspace*.json
-SPPStudioDocs/.obsidian/graph*.json
-SPPStudioDocs/.obsidian/app.json
-SPPStudioDocs/.obsidian/appearance.json
-SPPStudioDocs/.obsidian/backlink.json
-SPPStudioDocs/.obsidian/types.json
 
 # --- Local AI/tool state ---
 .claude/
 .codex/
-
-# --- Obsidian runtime state ---
-# The entire .obsidian/ directory is runtime/compiled state.
-# Custom plugin source lives in Tools/spp-obsidian-plugin/ instead.
-SPPStudioDocs/.obsidian/
-SPPStudioDocs/.claudian/
 
 # --- spp-obsidian-plugin build output and dependencies ---
 Tools/spp-obsidian-plugin/node_modules/
@@ -38,15 +27,8 @@ DerivedData/
 *.o
 *.swiftmodule
 
-# --- Regenerated session/runtime state (machine-local, churns constantly) ---
+# --- Regenerated session/runtime state ---
 script/state/
-~/Library/Caches/SPPStudio/
-SPPStudioDocs/70_SessionContinuity/WorkerRuns/*.md
-
-# --- Prompt-bridge ephemeral queues (keep templates, drop in-flight prompts) ---
-SPPStudioDocs/40_PromptEngineering/PromptBridge/Queue/state/
-SPPStudioDocs/40_PromptEngineering/PromptBridge/Outbox/pending.md
-SPPStudioDocs/40_PromptEngineering/PromptBridge/Watchdog/
 
 # --- OS / editor noise ---
 .DS_Store
