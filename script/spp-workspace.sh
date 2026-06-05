@@ -210,9 +210,18 @@ unsafe_to_continue() {
 }
 
 recommended_next_action() {
-  local file="$VAULT_DIR/00_CommandCenter/recommended-next-action.md"
+  local file="$VAULT_DIR/00_CommandCenter/recommended-next-action.md" action
   if [ -f "$file" ]; then
-    grep -m 1 -E '^[^#[:space:]]' "$file" 2>/dev/null && return 0
+    action="$(awk '
+      /^[[:space:]]*$/ { next }
+      /^[[:space:]]*#/ { next }
+      /^[[:space:]]*>/ { next }
+      { print; exit }
+    ' "$file" 2>/dev/null || true)"
+    if [ -n "$action" ]; then
+      printf "%s\n" "$action"
+      return 0
+    fi
   fi
   echo "Inline diagnostics foundation: BuildService parsed events -> FileDiagnosticsStore -> editor consumers."
 }
