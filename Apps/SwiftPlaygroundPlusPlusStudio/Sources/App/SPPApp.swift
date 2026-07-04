@@ -14,6 +14,7 @@ struct SPPStudioApp: App {
         WindowGroup {
             IDEWindowView()
                 .environmentObject(appEnv)
+                .environmentObject(appEnv.fileDiagnosticsStore)
                 .task {
                     await appEnv.bootstrap()
                     for url in startupProjectURLs() {
@@ -198,4 +199,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 extension Notification.Name {
     static let sppNewProjectRequested = Notification.Name("SPPStudio.NewProjectRequested")
     static let sppOpenProjectRequested = Notification.Name("SPPStudio.OpenProjectRequested")
+    /// Requests the console open and select a specific tab. `object` is the
+    /// `ConsoleTab.rawValue` to select. Used by the toolbar diagnostics badge.
+    static let sppShowConsoleTab = Notification.Name("SPPStudio.ShowConsoleTab")
 }

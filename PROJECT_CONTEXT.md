@@ -53,11 +53,13 @@ Apps/SwiftPlaygroundPlusPlusStudio/Sources/
 - No `print()` statements in committed code
 - macOS 14+ APIs permitted; no backwards compatibility shims
 
-## Implementation Priorities (May 2026)
-1. Wire build button → `sppctl build` subprocess
-2. Code completion (basic keyword/symbol list)
-3. Inline error/warning annotations from build output
-4. Find & Replace panel
+## Implementation Priorities
+M6 (editor intelligence) has landed: build diagnostics, gutter markers, Problems
+panel, hover, and NSTextView-native completion. Next:
+1. Wire build button → `sppctl build` subprocess (M7)
+2. Build configuration picker (Debug / Release) (M7)
+3. Dedicated inline Find & Replace panel (basic Find already via NSTextFinder)
+4. M8 device/simulator deployment
 
 ## What's Working
 - Full 3-pane IDE layout
@@ -67,11 +69,11 @@ Apps/SwiftPlaygroundPlusPlusStudio/Sources/
 - Build console: ANSI stripping, auto-scroll toggle, warning/error line colors
 
 ## What's NOT Working Yet
-- Build button (placeholder, not wired)
-- Code completion
-- Error annotations in editor
-- Device/simulator integration
-- Any SPP package UI integration (all packages exist but none surfaced in UI)
+- `sppctl`-driven build (toolbar build runs `make` directly; CLI wiring is M7)
+- Build configuration picker (Debug / Release)
+- Device/on-hardware deployment (M8)
+- Symbol index / jump-to-symbol (M9)
+- Most SPP package UI integration (packages exist; diagnostics via SPPCore now surfaced)
 
 ## Forbidden Behaviors (for AI agents)
 - Do not refactor files outside the scope of the current task

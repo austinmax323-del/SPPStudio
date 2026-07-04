@@ -39,6 +39,11 @@ struct ConsoleTabView: View {
             tabContent
         }
         .background(IDETheme.Colors.consoleBackground)
+        .onReceive(NotificationCenter.default.publisher(for: .sppShowConsoleTab)) { note in
+            if let raw = note.object as? String, let tab = ConsoleTab(rawValue: raw) {
+                withAnimation(IDETheme.Animation.snap) { selectedTab = tab }
+            }
+        }
     }
 
     // MARK: - Tab Bar
