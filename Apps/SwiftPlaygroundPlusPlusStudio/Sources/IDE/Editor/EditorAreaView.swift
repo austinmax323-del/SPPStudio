@@ -53,6 +53,9 @@ struct EditorAreaView: View {
         .onReceive(appEnv.eventBus.publisher(for: FileSelectedEvent.self)) { event in
             openOrFocusTab(fileID: event.fileID)
         }
+        .onReceive(appEnv.eventBus.publisher(for: NavigateToLineEvent.self)) { event in
+            navigateToLine(fileID: event.fileID, line: event.line, column: event.column)
+        }
         .onAppear {
             openFirstProjectFileIfNeeded()
         }
@@ -352,6 +355,52 @@ struct EditorAreaView: View {
         return view.subviews.lazy.compactMap { visibleCodeTextView(in: $0) }.first
     }
 
+    // MARK: - Navigation (click-to-jump)
+
+    /// Opens/focuses a file and moves the caret to a 1-based line/column,
+    /// scrolling it into view. Selection flows through the tab binding (so the
+    /// pooled editor picks it up); scroll + focus are applied to the now-visible
+    /// text view once SwiftUI has switched tabs.
+    private func navigateToLine(fileID: UUID, line: Int, column: Int?) {
+        openOrFocusTab(fileID: fileID)
+        guard let idx = tabs.firstIndex(where: { $0.fileID == fileID }) else { return }
+        let range = caretRange(line: line, column: column, in: tabs[idx].contents)
+        tabs[idx].selectedRange = range
+        activeTabID = tabs[idx].id
+
+        DispatchQueue.main.async {
+            guard let window = NSApp.keyWindow ?? NSApp.mainWindow,
+                  let tv = visibleCodeTextView(in: window.contentView) else { return }
+            let length = (tv.string as NSString).length
+            let caret = NSRange(location: min(range.location, length), length: 0)
+            tv.setSelectedRange(caret)
+            tv.scrollRangeToVisible(caret)
+            window.makeFirstResponder(tv)
+        }
+    }
+
+    /// Zero-length caret range at the start of a 1-based line, offset by an
+    /// optional 1-based column, clamped to the line's content.
+    private func caretRange(line: Int, column: Int?, in text: String) -> NSRange {
+        let ns = text as NSString
+        let len = ns.length
+        var index = 0
+        var currentLine = 1
+        while currentLine < line, index < len {
+            let nl = ns.range(of: "\n", options: [], range: NSRange(location: index, length: len - index))
+            if nl.location == NSNotFound { index = len; break }
+            index = nl.location + 1
+            currentLine += 1
+        }
+        if let column, column > 1, index <= len {
+            var lineStart = 0, lineEnd = 0, contentsEnd = 0
+            ns.getLineStart(&lineStart, end: &lineEnd, contentsEnd: &contentsEnd,
+                            for: NSRange(location: min(index, len), length: 0))
+            index = min(lineStart + (column - 1), contentsEnd)
+        }
+        return NSRange(location: min(index, len), length: 0)
+    }
+
     // MARK: - Tab Management
 
     private func openOrFocusTab(fileID: UUID) {
@@ -568,6 +617,11 @@ final class CodeTextView: NSTextView {
     private(set) var drawCount = 0
     private(set) var lastDirtyRect = NSRect.zero
 
+    /// 1-based line → combined diagnostic message, used for hover tooltips.
+    /// Set by the editor coordinator from `FileDiagnosticsStore`.
+    var diagnosticMessagesByLine: [Int: String] = [:]
+    private var diagnosticTrackingArea: NSTrackingArea?
+
     override var isOpaque: Bool { true }
 
     override var wantsLayer: Bool {
@@ -581,6 +635,60 @@ final class CodeTextView: NSTextView {
         super.viewDidMoveToWindow()
         needsDisplay = true
         layer?.needsDisplay()
+    }
+
+    // MARK: - Hover tooltips (diagnostics)
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let diagnosticTrackingArea { removeTrackingArea(diagnosticTrackingArea) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        diagnosticTrackingArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        guard !diagnosticMessagesByLine.isEmpty else {
+            if toolTip != nil { toolTip = nil }
+            return
+        }
+        guard let layoutManager, let textContainer else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        let containerPoint = NSPoint(
+            x: point.x - textContainerOrigin.x,
+            y: point.y - textContainerOrigin.y
+        )
+        // Ignore hovers below all text so we don't show a stale last-line tooltip.
+        let usedRect = layoutManager.usedRect(for: textContainer)
+        guard containerPoint.y <= usedRect.maxY else {
+            if toolTip != nil { toolTip = nil }
+            return
+        }
+        let glyphIndex = layoutManager.glyphIndex(for: containerPoint, in: textContainer)
+        let charIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
+        let line = lineNumber(forCharacterIndex: charIndex)
+        let message = diagnosticMessagesByLine[line]
+        if toolTip != message { toolTip = message }
+    }
+
+    private func lineNumber(forCharacterIndex index: Int) -> Int {
+        let ns = string as NSString
+        let clamped = min(max(0, index), ns.length)
+        var line = 1
+        var i = 0
+        while i < clamped {
+            let nl = ns.range(of: "\n", options: [], range: NSRange(location: i, length: clamped - i))
+            if nl.location == NSNotFound { break }
+            line += 1
+            i = nl.location + 1
+        }
+        return line
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -1151,8 +1259,15 @@ struct CodeEditorView: NSViewRepresentable {
             appliedDiagnosticRanges.removeAll(keepingCapacity: true)
 
             var markerLines: [Int: Diagnostic.Severity] = [:]
+            var messagesByLine: [Int: String] = [:]
             for diag in diagnostics {
                 markerLines[diag.line] = max(markerLines[diag.line] ?? diag.severity, diag.severity)
+                let label = Self.severityLabel(diag.severity)
+                if let existing = messagesByLine[diag.line] {
+                    messagesByLine[diag.line] = existing + "\n\(label): \(diag.message)"
+                } else {
+                    messagesByLine[diag.line] = "\(label): \(diag.message)"
+                }
 
                 guard let range = diagnosticUnderlineRange(for: diag, in: ns) else { continue }
                 let style: NSUnderlineStyle = diag.severity == .error ? .thick : .single
@@ -1167,8 +1282,17 @@ struct CodeEditorView: NSViewRepresentable {
             }
 
             ruler?.diagnosticLines = markerLines
+            tv.diagnosticMessagesByLine = messagesByLine
             tv.renderOverlay?.needsDisplay = true
             tv.needsDisplay = true
+        }
+
+        private static func severityLabel(_ severity: Diagnostic.Severity) -> String {
+            switch severity {
+            case .error:   return "Error"
+            case .warning: return "Warning"
+            case .note:    return "Note"
+            }
         }
 
         /// Character range to underline for a diagnostic: from the first

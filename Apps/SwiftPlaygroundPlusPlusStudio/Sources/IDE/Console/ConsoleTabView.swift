@@ -5,6 +5,7 @@ import SPPCore
 
 enum ConsoleTab: String, CaseIterable, Identifiable {
     case build     = "Build"
+    case problems  = "Problems"
     case simulator = "Simulator"
     case runtime   = "Runtime"
     case packages  = "Packages"
@@ -14,6 +15,7 @@ enum ConsoleTab: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .build:     return "hammer"
+        case .problems:  return "exclamationmark.triangle"
         case .simulator: return "iphone"
         case .runtime:   return "play.circle"
         case .packages:  return "shippingbox"
@@ -24,6 +26,8 @@ enum ConsoleTab: String, CaseIterable, Identifiable {
 // MARK: - Console Tab View
 
 struct ConsoleTabView: View {
+
+    @EnvironmentObject var diagnostics: FileDiagnosticsStore
 
     @State private var selectedTab: ConsoleTab = .build
     @State private var hoveredTab:  ConsoleTab? = nil
@@ -81,6 +85,7 @@ struct ConsoleTabView: View {
                         .font(.system(size: 10, weight: isSelected ? .medium : .regular))
                     Text(tab.rawValue)
                         .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
+                    if tab == .problems { problemsBadge }
                 }
                 .foregroundStyle(
                     isSelected
@@ -104,6 +109,28 @@ struct ConsoleTabView: View {
         .animation(IDETheme.Animation.snap, value: isSelected)
     }
 
+    // MARK: - Problems Badge
+
+    @ViewBuilder
+    private var problemsBadge: some View {
+        let errors = diagnostics.totalErrorCount
+        let warnings = diagnostics.totalWarningCount
+        if errors > 0 {
+            countPill(errors, color: IDETheme.Colors.diagnosticError)
+        } else if warnings > 0 {
+            countPill(warnings, color: IDETheme.Colors.diagnosticWarning)
+        }
+    }
+
+    private func countPill(_ count: Int, color: Color) -> some View {
+        Text("\(count)")
+            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+            .foregroundStyle(color)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(Capsule().fill(color.opacity(0.16)))
+    }
+
     // MARK: - Tab Content
 
     @ViewBuilder
@@ -111,6 +138,8 @@ struct ConsoleTabView: View {
         switch selectedTab {
         case .build:
             BuildConsoleView()
+        case .problems:
+            ProblemsPanelView()
         case .simulator:
             SimulatorPanelView()
         case .runtime:

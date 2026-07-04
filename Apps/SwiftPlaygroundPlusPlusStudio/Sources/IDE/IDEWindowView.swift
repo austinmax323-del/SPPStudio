@@ -34,6 +34,7 @@ struct IDEWindowView: View {
         .environmentObject(appEnv.injectionExecutionService)
         .environmentObject(appEnv.injectionVerificationService)
         .environmentObject(appEnv.simulatorRunCoordinator)
+        .environmentObject(appEnv.fileDiagnosticsStore)
     }
 
     // MARK: - Split View
