@@ -296,7 +296,7 @@ public final class AppEnvironment: ObservableObject {
             .flatMap { $0.allFiles() }
             .filter { !$0.isDirectory }
         let grouped = diagnosticsCollector.grouped { path in
-            BuildDiagnosticsCollector.resolveFileID(
+            DiagnosticPathResolver.resolveFileID(
                 forCompilerPath: path,
                 leaves: leaves,
                 projectURL: projectURL
