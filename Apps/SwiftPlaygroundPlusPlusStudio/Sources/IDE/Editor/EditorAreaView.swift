@@ -917,7 +917,6 @@ struct CodeEditorView: NSViewRepresentable {
         scrollView.hasVerticalRuler  = true
         scrollView.rulersVisible     = true
         context.coordinator.ruler    = ruler
-        context.coordinator.textView = tv
         context.coordinator.lastRenderedText = tv.string
         RuntimeInvariantInspector.register(
             tabID: tabID,
@@ -926,7 +925,7 @@ struct CodeEditorView: NSViewRepresentable {
             textView: tv,
             scrollView: scrollView
         )
-        context.coordinator.observeDiagnostics(store: diagnosticsStore, fileID: fileID)
+        context.coordinator.observeDiagnostics(store: diagnosticsStore, fileID: fileID, textView: tv)
 
         return CodeEditorContainerView(scrollView: scrollView, renderOverlay: renderOverlay)
     }
@@ -960,7 +959,7 @@ struct CodeEditorView: NSViewRepresentable {
             context.coordinator.lastRenderedText = text
             context.coordinator.isApplyingExternalUpdate = false
             context.coordinator.updateEditorChrome(tv)
-            context.coordinator.reapplyDiagnostics()
+            context.coordinator.reapplyDiagnostics(tv)
             context.coordinator.ruler?.needsDisplay = true
             tv.needsDisplay = true
             // Defer a second layout+display pass to after SwiftUI's layout phase.
@@ -1066,7 +1065,6 @@ struct CodeEditorView: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: CodeEditorView
         weak var ruler: LineNumberRulerView?
-        weak var textView: CodeTextView?
         var symbolHighlightedRanges: [NSRange] = []
         var lastRenderedText = ""
         var isApplyingExternalUpdate = false
@@ -1250,12 +1248,13 @@ struct CodeEditorView: NSViewRepresentable {
         /// present when the editor is created are applied at once (a no-op until
         /// the text has been loaded — `reapplyDiagnostics()` covers that case).
         @MainActor
-        func observeDiagnostics(store: FileDiagnosticsStore, fileID: UUID) {
+        func observeDiagnostics(store: FileDiagnosticsStore, fileID: UUID, textView tv: CodeTextView) {
             diagnosticsCancellable = store.publisher(for: fileID)
-                .sink { [weak self] diagnostics in
+                .sink { [weak self, weak tv] diagnostics in
                     // The store is @MainActor and only ever mutated on the main
                     // actor, so its emissions arrive on the main actor too.
-                    MainActor.assumeIsolated { self?.applyDiagnostics(diagnostics) }
+                    guard let tv else { return }
+                    MainActor.assumeIsolated { self?.applyDiagnostics(diagnostics, to: tv) }
                 }
         }
 
@@ -1263,16 +1262,16 @@ struct CodeEditorView: NSViewRepresentable {
         /// an external text (re)load, when the layout finally has the characters
         /// the diagnostic ranges refer to.
         @MainActor
-        func reapplyDiagnostics() {
-            applyDiagnostics(parent.diagnosticsStore.diagnostics(for: parent.fileID))
+        func reapplyDiagnostics(_ tv: CodeTextView) {
+            applyDiagnostics(parent.diagnosticsStore.diagnostics(for: parent.fileID), to: tv)
         }
 
         /// Renders diagnostics as *temporary* layout attributes (underline) plus
         /// gutter markers. Never mutates text storage — diagnostics are advisory
         /// rendering state owned by file identity, not the editor.
         @MainActor
-        private func applyDiagnostics(_ diagnostics: [Diagnostic]) {
-            guard let tv = textView, let lm = tv.layoutManager else { return }
+        private func applyDiagnostics(_ diagnostics: [Diagnostic], to tv: CodeTextView) {
+            guard let lm = tv.layoutManager else { return }
             let ns = tv.string as NSString
 
             for range in appliedDiagnosticRanges where NSMaxRange(range) <= ns.length {
