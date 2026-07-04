@@ -1,4 +1,5 @@
 import Foundation
+import SPPDeviceKit
 
 // MARK: - InjectionExecutionResult
 
@@ -94,7 +95,11 @@ public final class InjectionExecutionService: ObservableObject {
         log("  dylib:  \(dylibURL.path)")
         log("  $ \(commandString)")
 
-        let outcome = await ProcessRunner.run(executable: "/usr/bin/xcrun", arguments: arguments)
+        let outcome = await ProcessRunner.run(
+            executable: "/usr/bin/xcrun",
+            arguments: arguments,
+            environment: SimulatorToolchain.processEnvironment()
+        )
         let endedAt = Date()
 
         let pid = parsePID(from: outcome.stdout, bundleID: bundleID)

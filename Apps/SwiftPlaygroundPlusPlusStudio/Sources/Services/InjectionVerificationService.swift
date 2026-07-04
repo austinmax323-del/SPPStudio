@@ -1,4 +1,5 @@
 import Foundation
+import SPPDeviceKit
 
 // MARK: - InjectionVerificationResult
 
@@ -501,7 +502,8 @@ public final class InjectionVerificationService: ObservableObject {
                 "log", "stream",
                 "--style", "compact",
                 "--predicate", "eventMessage CONTAINS \"\(Self.markerPrefix)\""
-            ]
+            ],
+            environment: SimulatorToolchain.processEnvironment()
         )
         let state = WatchState()
 

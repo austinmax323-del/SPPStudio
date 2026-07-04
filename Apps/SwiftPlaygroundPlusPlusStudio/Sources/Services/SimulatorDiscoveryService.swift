@@ -105,7 +105,8 @@ public actor SimulatorDiscoveryService {
     public func discoverTargets() async -> [SimulatorTarget] {
         let result = await ProcessRunner.run(
             executable: "/usr/bin/xcrun",
-            arguments: ["simctl", "list", "devices", "--json"]
+            arguments: ["simctl", "list", "devices", "--json"],
+            environment: SimulatorToolchain.processEnvironment()
         )
         guard result.succeeded else { return [] }
         return parse(Data(result.stdout.utf8))
@@ -130,7 +131,8 @@ public actor SimulatorDiscoveryService {
     public func fetchProcessTargets(for udid: String) async -> [SimulatorTarget.ProcessTarget] {
         let result = await ProcessRunner.run(
             executable: "/usr/bin/xcrun",
-            arguments: ["simctl", "listapps", udid]
+            arguments: ["simctl", "listapps", udid],
+            environment: SimulatorToolchain.processEnvironment()
         )
         guard result.succeeded else { return [] }
         guard let raw = try? PropertyListSerialization.propertyList(from: Data(result.stdout.utf8), format: nil),

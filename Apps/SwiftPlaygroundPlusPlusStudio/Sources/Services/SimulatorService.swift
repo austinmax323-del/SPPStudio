@@ -151,7 +151,8 @@ public final class SimulatorService: ObservableObject {
     private func queryInstalledApps(deviceID: String) async -> [SimulatorApp] {
         let result = await ProcessRunner.run(
             executable: "/usr/bin/xcrun",
-            arguments: ["simctl", "listapps", deviceID]
+            arguments: ["simctl", "listapps", deviceID],
+            environment: SimulatorToolchain.processEnvironment()
         )
         var apps: [SimulatorApp] = []
         if let raw = try? PropertyListSerialization.propertyList(from: Data(result.stdout.utf8), format: nil),
@@ -219,7 +220,8 @@ public final class SimulatorService: ObservableObject {
     private func fetchBootedIDs() async -> Set<String> {
         let result = await ProcessRunner.run(
             executable: "/usr/bin/xcrun",
-            arguments: ["simctl", "list", "devices", "booted", "--json"]
+            arguments: ["simctl", "list", "devices", "booted", "--json"],
+            environment: SimulatorToolchain.processEnvironment()
         )
         var ids = Set<String>()
         if let json = try? JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any],

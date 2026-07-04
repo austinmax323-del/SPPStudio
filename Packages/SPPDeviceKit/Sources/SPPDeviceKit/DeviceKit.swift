@@ -103,6 +103,9 @@ private func runProcess(
         let process = Process()
         process.executableURL = executableURL
         process.arguments = arguments
+        // Point xcrun at a full Xcode so `simctl` resolves even when
+        // `xcode-select` targets Command Line Tools (which has no simctl).
+        process.environment = SimulatorToolchain.processEnvironment()
 
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
@@ -133,6 +136,65 @@ private func runProcess(
 }
 
 private let xcrunURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+
+// MARK: - SimulatorToolchain
+
+/// Locates a full-Xcode developer directory for `simctl` invocations.
+///
+/// `simctl` ships **only** inside `Xcode.app` — the Command Line Tools have no
+/// `simctl`. When `xcode-select` points at the Command Line Tools (the common
+/// default), a bare `xcrun simctl` fails with *"unable to find utility simctl"*.
+/// This resolver finds a real Xcode and hands back a child environment with
+/// `DEVELOPER_DIR` set, so every simctl call works regardless of the global
+/// `xcode-select` state.
+///
+/// It resolves once and caches the result (Xcode does not move mid-session).
+public enum SimulatorToolchain {
+
+    /// A full-Xcode developer dir that contains `simctl`, or `nil` when only the
+    /// Command Line Tools are installed.
+    public static func developerDir() -> String? { cached.dir }
+
+    /// Child-process environment for `xcrun`/`simctl`: the current environment
+    /// with `DEVELOPER_DIR` overridden to a resolved full Xcode when one exists.
+    public static func processEnvironment() -> [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        if let dir = developerDir() {
+            env["DEVELOPER_DIR"] = dir
+        }
+        return env
+    }
+
+    /// Whether a simctl-capable toolchain was found.
+    public static var isAvailable: Bool { developerDir() != nil }
+
+    // MARK: - Resolution
+
+    private static let cached: (dir: String?, _: Void) = (resolveDeveloperDir(), ())
+
+    private static func resolveDeveloperDir() -> String? {
+        let fm = FileManager.default
+        func hasSimctl(_ dir: String) -> Bool {
+            fm.isExecutableFile(atPath: dir + "/usr/bin/simctl")
+        }
+
+        // 1. An explicit DEVELOPER_DIR override, if it actually has simctl.
+        if let env = ProcessInfo.processInfo.environment["DEVELOPER_DIR"], hasSimctl(env) {
+            return env
+        }
+        // 2. The conventional Xcode.app location.
+        let conventional = "/Applications/Xcode.app/Contents/Developer"
+        if hasSimctl(conventional) { return conventional }
+        // 3. Any other /Applications/Xcode*.app (beta installs, versioned copies).
+        if let apps = try? fm.contentsOfDirectory(atPath: "/Applications") {
+            for app in apps.sorted() where app.hasPrefix("Xcode") && app.hasSuffix(".app") {
+                let dir = "/Applications/\(app)/Contents/Developer"
+                if hasSimctl(dir) { return dir }
+            }
+        }
+        return nil
+    }
+}
 
 // MARK: - SimulatorDeviceProvider
 

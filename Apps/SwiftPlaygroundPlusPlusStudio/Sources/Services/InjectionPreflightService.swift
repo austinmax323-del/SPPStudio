@@ -1,4 +1,5 @@
 import Foundation
+import SPPDeviceKit
 
 // MARK: - InjectionPreflightResult
 
@@ -88,15 +89,13 @@ public final class InjectionPreflightService: ObservableObject {
         // ── Check 2: simctl responds ──────────────────────────────────────────
 
         if xcrunPresent {
-            let simctlOK = await pingSimctl()
+            let ping = await pingSimctl()
             checks.append(.init(
                 name:   "xcrun simctl usable",
-                detail: simctlOK
-                    ? "simctl responded successfully"
-                    : "simctl error — Xcode may not be fully installed or license not accepted",
-                status: simctlOK ? .pass : .fail
+                detail: ping.detail,
+                status: ping.ok ? .pass : .fail
             ))
-            log(simctlOK ? "✓ simctl: responsive" : "✗ simctl: error (try: sudo xcodebuild -license)")
+            log(ping.ok ? "✓ simctl: \(ping.detail)" : "✗ simctl:\n  \(ping.logDetail)")
         } else {
             checks.append(.init(
                 name: "xcrun simctl usable", detail: "Skipped — xcrun unavailable", status: .skip
@@ -331,11 +330,43 @@ public final class InjectionPreflightService: ObservableObject {
 
     // MARK: - Helpers
 
-    private func pingSimctl() async -> Bool {
-        await ProcessRunner.run(
+    private struct SimctlPing {
+        let ok: Bool
+        /// Shown in the check row — the exact status or failure reason.
+        let detail: String
+        /// Verbose form for the log (full command + stderr).
+        let logDetail: String
+    }
+
+    /// Pings `simctl` through a resolved full-Xcode toolchain and reports the
+    /// real outcome — the exact command, exit code, and stderr on failure —
+    /// rather than collapsing everything into a generic error.
+    private func pingSimctl() async -> SimctlPing {
+        guard let devDir = SimulatorToolchain.developerDir() else {
+            let detail = "No full Xcode found. simctl ships only with Xcode.app, "
+                + "not the Command Line Tools. Install Xcode, then run: "
+                + "sudo xcode-select -s /Applications/Xcode.app/Contents/Developer"
+            return SimctlPing(ok: false, detail: detail,
+                              logDetail: "no Xcode.app with simctl found (xcode-select currently targets Command Line Tools)")
+        }
+        let result = await ProcessRunner.run(
             executable: "/usr/bin/xcrun",
-            arguments: ["simctl", "help"]
-        ).succeeded
+            arguments: ["simctl", "help"],
+            environment: SimulatorToolchain.processEnvironment()
+        )
+        if result.succeeded {
+            return SimctlPing(ok: true,
+                              detail: "simctl responded via \(devDir)",
+                              logDetail: "simctl usable (DEVELOPER_DIR=\(devDir))")
+        }
+        let err = result.stderr.isEmpty
+            ? (result.stdout.isEmpty ? "no output" : result.stdout)
+            : result.stderr
+        return SimctlPing(
+            ok: false,
+            detail: "simctl failed (exit \(result.exitCode)): \(err)",
+            logDetail: "$ \(result.command)\n  → exit \(result.exitCode): \(err)"
+        )
     }
 
     private func log(_ message: String) {
