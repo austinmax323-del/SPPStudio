@@ -1108,6 +1108,29 @@ struct CodeEditorView: NSViewRepresentable {
             (tv as? CodeTextView)?.renderOverlay?.needsDisplay = true
         }
 
+        // MARK: Completion (M6)
+
+        /// NSTextView-native completion (triggered by ⌥⎋ / F5). Replaces the
+        /// system's spell-check suggestions with a language- and document-aware
+        /// list; falls back to the default when nothing matches.
+        func textView(
+            _ textView: NSTextView,
+            completions words: [String],
+            forPartialWordRange charRange: NSRange,
+            indexOfSelectedItem index: UnsafeMutablePointer<Int>?
+        ) -> [String] {
+            let ns = textView.string as NSString
+            guard charRange.length > 0, NSMaxRange(charRange) <= ns.length else { return words }
+            let partial = ns.substring(with: charRange)
+            let suggestions = CodeCompletionProvider.completions(
+                forPartialWord: partial,
+                in: textView.string,
+                contentType: parent.contentType
+            )
+            index?.pointee = suggestions.isEmpty ? -1 : 0
+            return suggestions.isEmpty ? words : suggestions
+        }
+
         @objc func scrollViewDidScroll(_ notification: Notification) {
             guard !isRestoringScroll else { return }
             guard let clipView = notification.object as? NSClipView else { return }
