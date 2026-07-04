@@ -1,4 +1,5 @@
 import AppKit
+import SPPCore
 
 // MARK: - Line Number Ruler View
 
@@ -15,6 +16,13 @@ final class LineNumberRulerView: NSRulerView {
 
     private(set) var currentLine: Int = 1 {
         didSet { if oldValue != currentLine { needsDisplay = true } }
+    }
+
+    /// 1-based line → most-severe diagnostic on that line. Drives the gutter
+    /// markers. Owned by the editor's coordinator, which derives it from the
+    /// `FileDiagnosticsStore` — the ruler is a pure renderer of this state.
+    var diagnosticLines: [Int: Diagnostic.Severity] = [:] {
+        didSet { if oldValue != diagnosticLines { needsDisplay = true } }
     }
 
     override init(scrollView: NSScrollView?, orientation: NSRulerView.Orientation) {
@@ -75,6 +83,9 @@ final class LineNumberRulerView: NSRulerView {
                     NSRect(x: 0, y: yInRuler, width: self.ruleThickness, height: lineRect.height).fill()
                     self.drawActiveAccent(y: yInRuler, h: lineRect.height)
                 }
+                if let severity = self.diagnosticLines[lineNumber] {
+                    self.drawDiagnosticMarker(severity: severity, y: yInRuler, h: lineRect.height)
+                }
                 self.drawLabel(lineNumber, y: yInRuler, h: lineRect.height, isActive: isActive)
                 lineNumber += 1
             }
@@ -89,6 +100,14 @@ final class LineNumberRulerView: NSRulerView {
     private func drawActiveAccent(y: CGFloat, h: CGFloat) {
         accentBarColor.setFill()
         NSRect(x: 0, y: y, width: 2, height: h).fill()
+    }
+
+    private func drawDiagnosticMarker(severity: Diagnostic.Severity, y: CGFloat, h: CGFloat) {
+        let color = IDETheme.EditorColors.underline(for: severity)
+        let d: CGFloat = 6
+        let rect = NSRect(x: 5, y: y + (h - d) / 2, width: d, height: d)
+        color.setFill()
+        NSBezierPath(ovalIn: rect).fill()
     }
 
     private func drawLabel(_ n: Int, y: CGFloat, h: CGFloat, isActive: Bool) {

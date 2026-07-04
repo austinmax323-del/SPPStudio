@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 import SPPCore
 
 // MARK: - Editor Tab Model
@@ -166,6 +167,7 @@ struct EditorAreaView: View {
                     contentType: tab.contentType,
                     tabID: tab.id,
                     fileID: tab.fileID,
+                    diagnosticsStore: appEnv.fileDiagnosticsStore,
                     isActive: tab.id == activeTabID,
                     selection: Binding(
                         get: { tabs.first(where: { $0.id == tab.id })?.selectedRange ?? NSRange(location: 0, length: 0) },
@@ -716,6 +718,7 @@ struct CodeEditorView: NSViewRepresentable {
     let contentType: SPPFile.FileContentType
     let tabID: UUID
     let fileID: UUID
+    let diagnosticsStore: FileDiagnosticsStore
     let isActive: Bool
     @Binding var selection: NSRange
     @Binding var scrollOffset: NSPoint
@@ -806,6 +809,7 @@ struct CodeEditorView: NSViewRepresentable {
         scrollView.hasVerticalRuler  = true
         scrollView.rulersVisible     = true
         context.coordinator.ruler    = ruler
+        context.coordinator.textView = tv
         context.coordinator.lastRenderedText = tv.string
         RuntimeInvariantInspector.register(
             tabID: tabID,
@@ -814,6 +818,7 @@ struct CodeEditorView: NSViewRepresentable {
             textView: tv,
             scrollView: scrollView
         )
+        context.coordinator.observeDiagnostics(store: diagnosticsStore, fileID: fileID)
 
         return CodeEditorContainerView(scrollView: scrollView, renderOverlay: renderOverlay)
     }
@@ -847,6 +852,7 @@ struct CodeEditorView: NSViewRepresentable {
             context.coordinator.lastRenderedText = text
             context.coordinator.isApplyingExternalUpdate = false
             context.coordinator.updateEditorChrome(tv)
+            context.coordinator.reapplyDiagnostics()
             context.coordinator.ruler?.needsDisplay = true
             tv.needsDisplay = true
             // Defer a second layout+display pass to after SwiftUI's layout phase.
@@ -943,6 +949,7 @@ struct CodeEditorView: NSViewRepresentable {
 
     static func dismantleNSView(_ nsView: CodeEditorContainerView, coordinator: Coordinator) {
         NotificationCenter.default.removeObserver(coordinator)
+        coordinator.diagnosticsCancellable?.cancel()
         RuntimeInvariantInspector.unregister(tabID: coordinator.parent.tabID)
     }
 
@@ -951,10 +958,17 @@ struct CodeEditorView: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: CodeEditorView
         weak var ruler: LineNumberRulerView?
+        weak var textView: CodeTextView?
         var symbolHighlightedRanges: [NSRange] = []
         var lastRenderedText = ""
         var isApplyingExternalUpdate = false
         var isRestoringScroll = false
+
+        // Diagnostics (M6). Underline temporary attributes only — a different
+        // attribute key from symbol highlighting (.backgroundColor) so the two
+        // features never remove each other's temporary attributes.
+        var diagnosticsCancellable: AnyCancellable?
+        private var appliedDiagnosticRanges: [NSRange] = []
 
         init(_ parent: CodeEditorView) { self.parent = parent }
 
@@ -971,6 +985,10 @@ struct CodeEditorView: NSViewRepresentable {
             parent.selection = tv.selectedRange()
             RuntimeInvariantInspector.recordSelection(tabID: parent.tabID, fileID: parent.fileID, selection: parent.selection)
             updateEditorChrome(tv)
+            // The build's diagnostics are stale the moment the file is edited;
+            // drop them for this file. The store change flows back through the
+            // per-file publisher and clears the rendered underlines + markers.
+            parent.diagnosticsStore.clear(fileID: parent.fileID)
             ruler?.needsDisplay = true
         }
 
@@ -1092,6 +1110,104 @@ struct CodeEditorView: NSViewRepresentable {
                 lm.addTemporaryAttribute(.backgroundColor, value: color, forCharacterRange: r)
                 symbolHighlightedRanges.append(r)
             }
+        }
+
+        // MARK: Diagnostics (M6)
+
+        /// Subscribes this editor to the diagnostics for its own file. `@Published`
+        /// delivers the current value immediately, so any diagnostics already
+        /// present when the editor is created are applied at once (a no-op until
+        /// the text has been loaded — `reapplyDiagnostics()` covers that case).
+        @MainActor
+        func observeDiagnostics(store: FileDiagnosticsStore, fileID: UUID) {
+            diagnosticsCancellable = store.publisher(for: fileID)
+                .sink { [weak self] diagnostics in
+                    // The store is @MainActor and only ever mutated on the main
+                    // actor, so its emissions arrive on the main actor too.
+                    MainActor.assumeIsolated { self?.applyDiagnostics(diagnostics) }
+                }
+        }
+
+        /// Re-applies the store's current diagnostics for this file. Called after
+        /// an external text (re)load, when the layout finally has the characters
+        /// the diagnostic ranges refer to.
+        @MainActor
+        func reapplyDiagnostics() {
+            applyDiagnostics(parent.diagnosticsStore.diagnostics(for: parent.fileID))
+        }
+
+        /// Renders diagnostics as *temporary* layout attributes (underline) plus
+        /// gutter markers. Never mutates text storage — diagnostics are advisory
+        /// rendering state owned by file identity, not the editor.
+        @MainActor
+        private func applyDiagnostics(_ diagnostics: [Diagnostic]) {
+            guard let tv = textView, let lm = tv.layoutManager else { return }
+            let ns = tv.string as NSString
+
+            for range in appliedDiagnosticRanges where NSMaxRange(range) <= ns.length {
+                lm.removeTemporaryAttribute(.underlineStyle, forCharacterRange: range)
+                lm.removeTemporaryAttribute(.underlineColor, forCharacterRange: range)
+            }
+            appliedDiagnosticRanges.removeAll(keepingCapacity: true)
+
+            var markerLines: [Int: Diagnostic.Severity] = [:]
+            for diag in diagnostics {
+                markerLines[diag.line] = max(markerLines[diag.line] ?? diag.severity, diag.severity)
+
+                guard let range = diagnosticUnderlineRange(for: diag, in: ns) else { continue }
+                let style: NSUnderlineStyle = diag.severity == .error ? .thick : .single
+                lm.addTemporaryAttributes(
+                    [
+                        .underlineStyle: style.rawValue,
+                        .underlineColor: IDETheme.EditorColors.underline(for: diag.severity)
+                    ],
+                    forCharacterRange: range
+                )
+                appliedDiagnosticRanges.append(range)
+            }
+
+            ruler?.diagnosticLines = markerLines
+            tv.renderOverlay?.needsDisplay = true
+            tv.needsDisplay = true
+        }
+
+        /// Character range to underline for a diagnostic: from the first
+        /// non-indentation character (or the reported column) to the end of the
+        /// line's content. Returns nil for out-of-range or empty lines.
+        private func diagnosticUnderlineRange(for diag: Diagnostic, in ns: NSString) -> NSRange? {
+            guard let lineRange = lineContentRange(diag.line, in: ns), lineRange.length > 0 else { return nil }
+            let end = NSMaxRange(lineRange)
+            var start = lineRange.location
+            while start < end {
+                let c = ns.character(at: start)
+                if c == 32 || c == 9 { start += 1 } else { break }
+            }
+            if let col = diag.column {
+                let colStart = lineRange.location + (col - 1)
+                if colStart >= lineRange.location, colStart < end { start = colStart }
+            }
+            let length = end - start
+            return length > 0 ? NSRange(location: start, length: length) : nil
+        }
+
+        /// Character range of a 1-based line's content (excluding the trailing
+        /// newline). Nil if the line is beyond the end of the text.
+        private func lineContentRange(_ line: Int, in ns: NSString) -> NSRange? {
+            guard line >= 1, ns.length > 0 else { return nil }
+            let len = ns.length
+            var currentLine = 1
+            var index = 0
+            while currentLine < line, index < len {
+                let nl = ns.range(of: "\n", options: [], range: NSRange(location: index, length: len - index))
+                guard nl.location != NSNotFound else { return nil }
+                index = nl.location + 1
+                currentLine += 1
+            }
+            guard currentLine == line else { return nil }
+            var lineStart = 0, lineEnd = 0, contentsEnd = 0
+            ns.getLineStart(&lineStart, end: &lineEnd, contentsEnd: &contentsEnd,
+                            for: NSRange(location: index, length: 0))
+            return NSRange(location: lineStart, length: max(0, contentsEnd - lineStart))
         }
     }
 }
