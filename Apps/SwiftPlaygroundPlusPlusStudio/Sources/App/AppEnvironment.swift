@@ -38,6 +38,17 @@ public final class AppEnvironment: ObservableObject {
     /// Lazy so it can hold a back-reference to this environment without an init cycle.
     public private(set) lazy var simulatorRunCoordinator = SimulatorRunCoordinator(appEnv: self)
 
+    // MARK: - Editor Intelligence
+
+    /// Single source of truth for build / analyzer diagnostics, keyed by file
+    /// identity. Editors observe it per-file and render advisory temporary
+    /// attributes; it never holds editor references. (M6)
+    public let fileDiagnosticsStore = FileDiagnosticsStore()
+
+    /// Accumulates compiler output during a build and, on completion, maps it to
+    /// per-file diagnostics for `fileDiagnosticsStore`.
+    private let diagnosticsCollector = BuildDiagnosticsCollector()
+
     // MARK: - Stable References
 
     public let logger: SPPLogger = .ide
@@ -119,6 +130,8 @@ public final class AppEnvironment: ObservableObject {
         defer { Task { @MainActor in self.isBuilding = false; self.buildCancellable = nil } }
 
         let start = Date()
+        diagnosticsCollector.reset()
+        fileDiagnosticsStore.clearAll()
         try? projectService.ensureBuildFiles()
 
         guard let developerDir = await xcodeDeveloperDir() else {
@@ -161,9 +174,9 @@ public final class AppEnvironment: ObservableObject {
         for await event in runner.start() {
             switch event {
             case .stdout(let line):
-                if !line.isEmpty { emit(line, isError: false) }
+                if !line.isEmpty { diagnosticsCollector.ingest(line); emit(line, isError: false) }
             case .stderr(let line):
-                if !line.isEmpty { emit(line, isError: line.lowercased().contains("error:")) }
+                if !line.isEmpty { diagnosticsCollector.ingest(line); emit(line, isError: line.lowercased().contains("error:")) }
             case .exit(let code):
                 exitCode = code
             }
@@ -171,6 +184,7 @@ public final class AppEnvironment: ObservableObject {
 
         let elapsed = String(format: "%.2fs", Date().timeIntervalSince(start))
         let success = exitCode == 0
+        publishBuildDiagnostics(project: project, projectURL: projectURL)
         let resolved = success ? builtSimulatorDylib(in: projectURL, projectName: project.name) : nil
 
         if let dylib = resolved {
@@ -200,6 +214,8 @@ public final class AppEnvironment: ObservableObject {
     @discardableResult
     private func runBuild(project: SPPProject, at projectURL: URL) async -> Bool {
         let start = Date()
+        diagnosticsCollector.reset()
+        fileDiagnosticsStore.clearAll()
 
         // Ensure Makefile + control exist for legacy projects
         try? projectService.ensureBuildFiles()
@@ -230,9 +246,9 @@ public final class AppEnvironment: ObservableObject {
         for await event in runner.start() {
             switch event {
             case .stdout(let line):
-                if !line.isEmpty { emit(line, isError: false) }
+                if !line.isEmpty { diagnosticsCollector.ingest(line); emit(line, isError: false) }
             case .stderr(let line):
-                if !line.isEmpty { emit(line, isError: line.lowercased().contains("error:")) }
+                if !line.isEmpty { diagnosticsCollector.ingest(line); emit(line, isError: line.lowercased().contains("error:")) }
             case .exit(let code):
                 exitCode = code
             }
@@ -241,6 +257,7 @@ public final class AppEnvironment: ObservableObject {
         let elapsed = String(format: "%.2fs", Date().timeIntervalSince(start))
         let code = exitCode
         let success = code == 0
+        publishBuildDiagnostics(project: project, projectURL: projectURL)
 
         if success {
             let packageURL = latestDebPackage(in: projectURL)
@@ -269,6 +286,23 @@ public final class AppEnvironment: ObservableObject {
         Task { @MainActor [weak self] in
             self?.eventBus.publish(BuildOutputLineEvent(line: line, isError: isError))
         }
+    }
+
+    /// Resolves the diagnostics accumulated during a build to their owning
+    /// project files and publishes them to `fileDiagnosticsStore` in one atomic
+    /// update. Runs on the main actor; safe to call from the build loops.
+    private func publishBuildDiagnostics(project: SPPProject, projectURL: URL) {
+        let leaves = project.files
+            .flatMap { $0.allFiles() }
+            .filter { !$0.isDirectory }
+        let grouped = diagnosticsCollector.grouped { path in
+            BuildDiagnosticsCollector.resolveFileID(
+                forCompilerPath: path,
+                leaves: leaves,
+                projectURL: projectURL
+            )
+        }
+        fileDiagnosticsStore.replaceAll(grouped)
     }
 
     /// Resolves the raw .dylib produced by a Theos build.
