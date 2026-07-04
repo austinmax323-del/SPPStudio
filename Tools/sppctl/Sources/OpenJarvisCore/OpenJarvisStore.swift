@@ -441,6 +441,20 @@ public final class OpenJarvisStore {
         try update(task)
     }
 
+    public func updatePacketText(taskID: String, packetText: String, note: String? = nil) throws -> OpenJarvisTask {
+        guard var task = try fetchTask(id: taskID) else {
+            throw NSError(domain: "OpenJarvisStore", code: 404, userInfo: [NSLocalizedDescriptionKey: "Task '\(taskID)' not found."])
+        }
+        task.packetText = packetText
+        task.updatedAt = now()
+        try update(task)
+        try recordEvent(taskID: taskID, type: "task.packet_edited", payload: [
+            "chars": "\(packetText.count)",
+            "note": note ?? ""
+        ])
+        return task
+    }
+
     private func resolveVaultRoot(task: OpenJarvisTask) throws -> URL {
         if let root = task.vaultRoot {
             let url = URL(fileURLWithPath: root)

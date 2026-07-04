@@ -39,6 +39,9 @@ struct Jarvis: ParsableCommand {
             NextCommand.self,
             DoneCommand.self,
             ShowCommand.self,
+            ApproveCommand.self,
+            RejectCommand.self,
+            EditCommand.self,
             WritebackCommand.self,
             OpenCommand.self,
             TaskCommand.self,
@@ -106,7 +109,7 @@ struct SendCommand: ParsableCommand {
 struct AskCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "ask",
-        abstract: "Create context for Claude Code or Codex"
+        abstract: "Create a reviewable worker packet"
     )
 
     @OptionGroup var options: OpenJarvisCLIOptions
@@ -117,7 +120,7 @@ struct AskCommand: ParsableCommand {
     @Option(name: .long, help: "Target worker: claude | codex")
     var worker: String?
 
-    @Flag(name: .long, help: "Print only; do not copy the packet")
+    @Flag(name: .long, help: "Deprecated; ask always prints the packet for approval")
     var noCopy: Bool = false
 
     func run() throws {
@@ -145,17 +148,70 @@ struct AskCommand: ParsableCommand {
             )
         )
         let packet = try store.generatePacket(for: task.id, role: workerKind, limit: 5, scopeHint: scopes.isEmpty ? nil : scopes)
-        print("Created")
-        print("  Task     \(task.id.prefix(8))")
-        print("  Worker   \(workerKind.displayName)")
-        print("  Context  \(packet.retrievedContext.count) notes")
-        if noCopy {
-            print(packet.markdown)
-        } else {
-            try copyToClipboard(packet.markdown)
-            print("")
-            print("  Copied packet to clipboard.")
-        }
+        try recordApprovalRequested(store: store, taskID: task.id, packetText: packet.markdown)
+        let storedTask = try store.fetchTask(id: task.id) ?? task
+        print(renderApprovalReview(task: storedTask, packetText: packet.markdown, approval: .pending))
+    }
+}
+
+struct ApproveCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "approve",
+        abstract: "Approve a worker packet after inspection"
+    )
+
+    @Argument(help: "Task ID")
+    var id: String
+
+    @Flag(name: .long, help: "Do not copy the approved packet to the clipboard")
+    var noCopy: Bool = false
+
+    @OptionGroup var options: OpenJarvisCLIOptions
+
+    func run() throws {
+        let store = try OpenJarvisStore(databaseURL: options.databaseURL())
+        let task = try approveTask(store: store, token: id, copy: !noCopy)
+        print(renderApprovalDecision(task: task, state: .approved, copied: !noCopy))
+    }
+}
+
+struct RejectCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "reject",
+        abstract: "Reject a worker packet"
+    )
+
+    @Argument(help: "Task ID")
+    var id: String
+
+    @Option(name: .long, help: "Reason for rejection")
+    var note: String?
+
+    @OptionGroup var options: OpenJarvisCLIOptions
+
+    func run() throws {
+        let store = try OpenJarvisStore(databaseURL: options.databaseURL())
+        let task = try rejectTask(store: store, token: id, note: note)
+        print(renderApprovalDecision(task: task, state: .rejected, copied: false))
+    }
+}
+
+struct EditCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "edit",
+        abstract: "Edit a stored worker packet before approval"
+    )
+
+    @Argument(help: "Task ID")
+    var id: String
+
+    @OptionGroup var options: OpenJarvisCLIOptions
+
+    func run() throws {
+        let store = try OpenJarvisStore(databaseURL: options.databaseURL())
+        let task = try editTaskPacket(store: store, token: id)
+        let approval = try approvalState(store: store, taskID: task.id)
+        print(renderApprovalReview(task: task, packetText: task.packetText ?? "", approval: approval))
     }
 }
 
@@ -190,8 +246,8 @@ struct CloseCommand: ParsableCommand {
             _ = try store.completeTask(id: taskID, note: closeNote)
             final = try store.writebackTask(id: taskID, note: closeNote)
         }
-        print("Archived")
-        print("  Task  \(final.id.prefix(8))")
+        print(sectionTitle("Archived"))
+        print(kv("Task", String(final.id.prefix(8))))
     }
 }
 
@@ -225,8 +281,8 @@ struct OverviewCommand: ParsableCommand {
         print("")
 
         guard snapshot.databaseExists else {
-            print("Open tasks")
-            print("  database does not exist yet")
+            print(sectionTitle("Open Tasks"))
+            print(emptyState("database does not exist yet"))
             print("")
             printCommonCommands()
             return
@@ -370,26 +426,26 @@ struct NextCommand: ParsableCommand {
     func run() throws {
         let snapshot = try OpenJarvisStatusReader.read(databaseURL: options.databaseURL())
         guard snapshot.databaseExists else {
-            print("Next")
-            print("  database does not exist yet")
-            print("  suggested: jarvis new \"your task\"")
+            print(sectionTitle("Next"))
+            print(emptyState("database does not exist yet"))
+            print(kv("Try", "jarvis ask \"your task\""))
             return
         }
 
         let store = try OpenJarvisStore(databaseURL: options.databaseURL())
         guard let task = try store.listTasks().first(where: { $0.completionState == .open }) else {
-            print("Next")
-            print("  no open tasks")
-            print("  suggested: jarvis new \"your task\"")
+            print(sectionTitle("Next"))
+            print(emptyState("no open tasks"))
+            print(kv("Try", "jarvis ask \"your task\""))
             return
         }
 
-        print("Next")
-        print("  Task    \(task.id.prefix(8))")
-        print("  Goal    \(task.objective)")
-        print("  State   \(visibleLifecycleLabel(for: task.stage))")
-        print("  Worker  \(task.worker?.displayName ?? "unassigned")")
-        print("  Next    \(suggestedCommand(for: task))")
+        print(sectionTitle("Next"))
+        print(kv("Task", String(task.id.prefix(8))))
+        print(kv("Goal", clipped(task.objective, limit: 72)))
+        print(kv("State", userFacingStage(task.stage)))
+        print(kv("Worker", task.worker?.displayName ?? "unassigned"))
+        print(kv("Next", suggestedCommand(for: task)))
     }
 }
 
@@ -461,7 +517,12 @@ struct ShowCommand: ParsableCommand {
     func run() throws {
         let store = try OpenJarvisStore(databaseURL: options.databaseURL())
         let task = try loadTask(store: store, token: id)
-        print(render(task: task))
+        if let packetText = task.packetText, !packetText.isEmpty {
+            let approval = try approvalState(store: store, taskID: task.id)
+            print(renderApprovalReview(task: task, packetText: packetText, approval: approval))
+        } else {
+            print(render(task: task))
+        }
     }
 }
 
@@ -812,31 +873,234 @@ struct PacketCommand: ParsableCommand {
         if copy {
             try copyToClipboard(packet.markdown)
             print("")
-            print("Copied packet to clipboard.")
+            print(sectionTitle("Copied"))
+            print(kv("Packet", "[ok] copied to clipboard"))
         }
     }
 }
 
 // MARK: - Rendering Helpers
 
+func sectionTitle(_ title: String) -> String {
+    "== \(title.uppercased()) =="
+}
+
+func kv(_ label: String, _ value: String) -> String {
+    let padded = label.padding(toLength: 8, withPad: " ", startingAt: 0)
+    return "  \(padded) \(value)"
+}
+
+func emptyState(_ message: String) -> String {
+    "  \(message)"
+}
+
+func clipped(_ text: String, limit: Int) -> String {
+    guard text.count > limit, limit > 3 else { return text }
+    return String(text.prefix(limit - 3)) + "..."
+}
+
+func statusBadge(_ ok: Bool) -> String {
+    ok ? "[ok]" : "[warn]"
+}
+
+func shellQuote(_ value: String) -> String {
+    "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+}
+
+enum JarvisApprovalState: String {
+    case pending
+    case approved
+    case rejected
+
+    var displayLabel: String {
+        switch self {
+        case .pending: return "[wait] pending"
+        case .approved: return "[ok] approved"
+        case .rejected: return "[err] rejected"
+        }
+    }
+}
+
+func approvalState(store: OpenJarvisStore, taskID: String) throws -> JarvisApprovalState {
+    let events = try store.listTaskEvents(taskID: taskID, limit: 100)
+    for event in events {
+        switch event.type {
+        case "task.approved":
+            return .approved
+        case "task.rejected":
+            return .rejected
+        case "task.packet_generated", "task.packet_edited", "task.approval_requested":
+            return .pending
+        default:
+            continue
+        }
+    }
+    return .pending
+}
+
+func estimatedTokens(for text: String) -> Int {
+    max(1, Int(ceil(Double(text.count) / 4.0)))
+}
+
+func packetSizeLabel(_ text: String) -> String {
+    "\(text.count) chars, ~\(estimatedTokens(for: text)) tokens"
+}
+
+func recordApprovalRequested(store: OpenJarvisStore, taskID: String, packetText: String) throws {
+    try store.recordEvent(taskID: taskID, type: "task.approval_requested", payload: [
+        "chars": "\(packetText.count)",
+        "estimated_tokens": "\(estimatedTokens(for: packetText))"
+    ])
+}
+
+func approveTask(store: OpenJarvisStore, token: String, copy: Bool) throws -> OpenJarvisTask {
+    let taskID = try loadTaskID(store: store, token: token)
+    guard let task = try store.fetchTask(id: taskID) else {
+        throw ValidationError("Task '\(taskID)' not found.")
+    }
+    guard let packetText = task.packetText, !packetText.isEmpty else {
+        throw ValidationError("Task \(taskID.prefix(8)) has no stored packet. Use: jarvis ask \"...\"")
+    }
+    try store.recordEvent(taskID: taskID, type: "task.approved", payload: [
+        "chars": "\(packetText.count)",
+        "estimated_tokens": "\(estimatedTokens(for: packetText))",
+        "worker": task.targetWorker?.rawValue ?? ""
+    ])
+    if copy {
+        try copyToClipboard(packetText)
+    }
+    return try store.fetchTask(id: taskID) ?? task
+}
+
+func rejectTask(store: OpenJarvisStore, token: String, note: String?) throws -> OpenJarvisTask {
+    let taskID = try loadTaskID(store: store, token: token)
+    guard let task = try store.fetchTask(id: taskID) else {
+        throw ValidationError("Task '\(taskID)' not found.")
+    }
+    try store.recordEvent(taskID: taskID, type: "task.rejected", payload: [
+        "note": note ?? "",
+        "worker": task.targetWorker?.rawValue ?? ""
+    ])
+    return try store.fetchTask(id: taskID) ?? task
+}
+
+func editTaskPacket(store: OpenJarvisStore, token: String) throws -> OpenJarvisTask {
+    let taskID = try loadTaskID(store: store, token: token)
+    guard let task = try store.fetchTask(id: taskID) else {
+        throw ValidationError("Task '\(taskID)' not found.")
+    }
+    guard let packetText = task.packetText, !packetText.isEmpty else {
+        throw ValidationError("Task \(taskID.prefix(8)) has no stored packet. Use: jarvis ask \"...\"")
+    }
+    let editor = ProcessInfo.processInfo.environment["VISUAL"]
+        ?? ProcessInfo.processInfo.environment["EDITOR"]
+        ?? "vi"
+    let tempURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("openjarvis-\(taskID.prefix(8))-packet.md")
+    try packetText.write(to: tempURL, atomically: true, encoding: .utf8)
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/sh")
+    process.arguments = ["-lc", "\(shellQuote(editor)) \(shellQuote(tempURL.path))"]
+    try process.run()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+        throw ValidationError("Editor exited with status \(process.terminationStatus). Packet was not changed.")
+    }
+    let edited = try String(contentsOf: tempURL, encoding: .utf8)
+    guard !edited.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        throw ValidationError("Edited packet is empty. Packet was not changed.")
+    }
+    return try store.updatePacketText(taskID: taskID, packetText: edited, note: "manual edit")
+}
+
+func requireApprovalForSend(store: OpenJarvisStore, taskID: String) throws {
+    let state = try approvalState(store: store, taskID: taskID)
+    guard state == .approved else {
+        try? store.recordEvent(taskID: taskID, type: "task.approval_required", payload: [
+            "state": state.rawValue
+        ])
+        throw ValidationError("Task \(taskID.prefix(8)) is \(state.rawValue). Review with: jarvis show \(taskID.prefix(8)); approve with: jarvis approve \(taskID.prefix(8))")
+    }
+}
+
+func renderContextSources(_ hits: [OpenJarvisRetrievalHit]) -> [String] {
+    guard !hits.isEmpty else { return [emptyState("no retrieved context sources")] }
+    return hits.enumerated().map { index, hit in
+        let rank = String(format: "%2d", index + 1)
+        return "  \(rank). [\(hit.score)] \(clipped(hit.path, limit: 72))"
+    }
+}
+
+func renderApprovalReview(task: OpenJarvisTask, packetText: String, approval: JarvisApprovalState) -> String {
+    var lines: [String] = []
+    let worker = task.targetWorker?.displayName ?? "unassigned"
+    lines.append(sectionTitle("Approval Required"))
+    lines.append(kv("Task", String(task.id.prefix(8))))
+    lines.append(kv("Worker", worker))
+    lines.append(kv("State", approval.displayLabel))
+    lines.append(kv("Context", "\(task.retrievedContext.count) sources"))
+    lines.append(kv("Size", packetSizeLabel(packetText)))
+    lines.append("")
+    lines.append(sectionTitle("Context Sources"))
+    lines.append(contentsOf: renderContextSources(task.retrievedContext))
+    lines.append("")
+    lines.append(sectionTitle("Generated Prompt"))
+    if packetText.isEmpty {
+        lines.append(emptyState("no packet stored"))
+    } else {
+        lines.append(packetText)
+    }
+    lines.append("")
+    lines.append(sectionTitle("Next"))
+    lines.append(kv("Inspect", "jarvis show \(task.id.prefix(8))"))
+    lines.append(kv("Approve", "jarvis approve \(task.id.prefix(8))"))
+    lines.append(kv("Reject", "jarvis reject \(task.id.prefix(8))"))
+    lines.append(kv("Edit", "jarvis edit \(task.id.prefix(8))"))
+    return lines.joined(separator: "\n")
+}
+
+func renderApprovalDecision(task: OpenJarvisTask, state: JarvisApprovalState, copied: Bool) -> String {
+    var lines: [String] = []
+    lines.append(sectionTitle(state == .approved ? "Approved" : "Rejected"))
+    lines.append(kv("Task", String(task.id.prefix(8))))
+    lines.append(kv("Worker", task.targetWorker?.displayName ?? "unassigned"))
+    lines.append(kv("State", state.displayLabel))
+    if let packetText = task.packetText {
+        lines.append(kv("Size", packetSizeLabel(packetText)))
+    }
+    if state == .approved {
+        lines.append(kv("Packet", copied ? "[ok] copied to clipboard" : "not copied"))
+        lines.append(kv("Next", "jarvis send \(task.targetWorker?.rawValue ?? "codex") \(task.id.prefix(8))"))
+    } else {
+        lines.append(kv("Next", "jarvis edit \(task.id.prefix(8))"))
+    }
+    return lines.joined(separator: "\n")
+}
+
 func render(task: OpenJarvisTask) -> String {
     var lines: [String] = []
-    lines.append("Task")
-    lines.append("  ID      \(task.id.prefix(8))")
-    lines.append("  State   \(visibleLifecycleLabel(for: task.stage))")
-    lines.append("  Worker  \(task.targetWorker?.displayName ?? "unassigned")")
-    lines.append("  Goal    \(task.interpretedObjective)")
+    lines.append(sectionTitle("Task"))
+    lines.append(kv("ID", String(task.id.prefix(8))))
+    lines.append(kv("State", visibleLifecycleLabel(for: task.stage)))
+    lines.append(kv("Worker", task.targetWorker?.displayName ?? "unassigned"))
+    lines.append(kv("Goal", clipped(task.interpretedObjective, limit: 72)))
     if let context = task.projectContext {
-        lines.append("  Project \(context)")
+        lines.append(kv("Project", context))
     }
     if !task.neededMemory.isEmpty {
-        lines.append("  Memory  \(task.neededMemory.joined(separator: ", "))")
+        lines.append(kv("Memory", task.neededMemory.joined(separator: ", ")))
     }
     if let nextAction = task.nextAction {
-        lines.append("  Next    \(nextAction)")
+        lines.append(kv("Next", clipped(nextAction, limit: 72)))
     }
     if let packetText = task.packetText {
+        lines.append(kv("Packet", packetSizeLabel(packetText)))
         lines.append("")
+        lines.append(sectionTitle("Context Sources"))
+        lines.append(contentsOf: renderContextSources(task.retrievedContext))
+        lines.append("")
+        lines.append(sectionTitle("Generated Prompt"))
         lines.append(packetText)
     }
     return lines.joined(separator: "\n")
@@ -844,18 +1108,24 @@ func render(task: OpenJarvisTask) -> String {
 
 func renderRetrieval(taskID: String?, query: String, hits: [OpenJarvisRetrievalHit]) -> String {
     var lines: [String] = []
-    lines.append("Retrieval")
-    if let taskID { lines.append("  Task   \(taskID.prefix(8))") }
-    lines.append("  Query  \(query)")
-    lines.append("  Hits   \(hits.count)")
+    lines.append(sectionTitle("Context"))
+    if let taskID { lines.append(kv("Task", String(taskID.prefix(8)))) }
+    lines.append(kv("Query", clipped(query, limit: 72)))
+    lines.append(kv("Hits", "\(hits.count)"))
+    guard !hits.isEmpty else {
+        lines.append(emptyState("no context hits"))
+        return lines.joined(separator: "\n")
+    }
+    lines.append("")
     for (index, hit) in hits.enumerated() {
-        lines.append("  \(index + 1). [\(hit.score)] \(hit.path)")
-        lines.append("     title: \(hit.title)")
+        let rank = String(format: "%2d", index + 1)
+        lines.append("  \(rank). [\(hit.score)] \(clipped(hit.path, limit: 68))")
+        lines.append("      title   \(clipped(hit.title, limit: 64))")
         if !hit.reasons.isEmpty {
-            lines.append("     reasons: \(hit.reasons.joined(separator: ", "))")
+            lines.append("      reason  \(hit.reasons.joined(separator: ", "))")
         }
         if !hit.excerpt.isEmpty {
-            lines.append("     excerpt: \(hit.excerpt)")
+            lines.append("      note    \(clipped(hit.excerpt, limit: 78))")
         }
     }
     return lines.joined(separator: "\n")
@@ -863,37 +1133,41 @@ func renderRetrieval(taskID: String?, query: String, hits: [OpenJarvisRetrievalH
 
 func renderHistory(taskID: String, events: [OpenJarvisTaskEvent], type: String?, limit: Int) -> String {
     var lines: [String] = []
-    lines.append("History")
-    lines.append("  Task    \(taskID.prefix(8))")
+    lines.append(sectionTitle("History"))
+    lines.append(kv("Task", String(taskID.prefix(8))))
     if let type {
-        lines.append("  Type    \(type)")
+        lines.append(kv("Type", type))
     }
-    lines.append("  Events  \(events.count)")
+    lines.append(kv("Events", "\(events.count)"))
+    guard !events.isEmpty else {
+        lines.append(emptyState("no events"))
+        return lines.joined(separator: "\n")
+    }
+    lines.append("")
     let landmarks: Set<String> = ["task.packet_generated", "task.completed", "task.writeback", "task.session_closed"]
     for event in events {
         if landmarks.contains(event.type) {
             lines.append("")
         }
         let age = relativeAge(from: event.createdAt)
-        lines.append("  \(event.id). \(age)  \(humanEventLabel(event.type))")
+        lines.append("  \(event.id). \(age.padding(toLength: 8, withPad: " ", startingAt: 0)) \(humanEventLabel(event.type))")
     }
     return lines.joined(separator: "\n")
 }
 
 func renderStatus(snapshot: OpenJarvisStatusSnapshot, vaultStatus: (resolved: Bool, detail: String)) -> String {
     var lines: [String] = []
-    lines.append("Status")
-    lines.append("  Store   \(snapshot.databaseExists ? "ready" : "not created")")
-    lines.append("  Tasks   \(snapshot.taskCount.map(String.init) ?? "unavailable")")
+    lines.append(sectionTitle("Status"))
+    lines.append(kv("Store", "\(statusBadge(snapshot.databaseExists)) \(snapshot.databaseExists ? "ready" : "not created")"))
+    lines.append(kv("Vault", "\(statusBadge(vaultStatus.resolved)) \(vaultStatus.resolved ? "ready" : "missing")"))
+    lines.append(kv("Tasks", snapshot.taskCount.map { "\($0) total" } ?? "unavailable"))
     if let latestTask = snapshot.latestTask {
-        let obj = latestTask.objective
-        let truncated = obj.count > 56 ? String(obj.prefix(53)) + "..." : obj
-        lines.append("  Latest  \(latestTask.id.prefix(8)) \(visibleLifecycleLabel(for: latestTask.stage))  \(truncated)")
-        lines.append("  Updated \(relativeAge(from: latestTask.updatedAt))")
+        let latest = "\(latestTask.id.prefix(8))  \(visibleLifecycleLabel(for: latestTask.stage))  \(clipped(latestTask.objective, limit: 48))"
+        lines.append(kv("Latest", latest))
+        lines.append(kv("Updated", relativeAge(from: latestTask.updatedAt)))
     } else {
-        lines.append("  Latest  none")
+        lines.append(kv("Latest", "none"))
     }
-    lines.append("  Vault   \(vaultStatus.resolved ? "ready" : "missing")")
     return lines.joined(separator: "\n")
 }
 
@@ -917,6 +1191,11 @@ func humanEventLabel(_ type: String) -> String {
     case "task.created": return "created"
     case "task.retrieved": return "context retrieved"
     case "task.packet_generated": return "packet generated"
+    case "task.approval_requested": return "approval requested"
+    case "task.approved": return "approved"
+    case "task.rejected": return "rejected"
+    case "task.packet_edited": return "packet edited"
+    case "task.approval_required": return "approval required"
     case "task.autopilot_launch": return "packet copied"
     case "task.worker_invoked": return "worker invoked"
     case "task.worker_response_saved": return "response saved"
@@ -931,23 +1210,30 @@ func humanEventLabel(_ type: String) -> String {
 
 func renderTaskList(_ tasks: [OpenJarvisTaskSummary], label: String, emptyMessage: String) -> String {
     var lines: [String] = []
-    lines.append(label.prefix(1).uppercased() + label.dropFirst())
+    lines.append(sectionTitle(String(label.prefix(1).uppercased() + label.dropFirst())))
     guard !tasks.isEmpty else {
-        lines.append("  \(emptyMessage)")
+        lines.append(emptyState(emptyMessage))
         return lines.joined(separator: "\n")
     }
+    lines.append("  ID        State     Worker    Objective")
+    lines.append("  --------  --------  --------  --------------------------------")
     for task in tasks {
-        let worker = task.worker?.displayName ?? "unassigned"
-        let objective = task.objective.count > 64 ? String(task.objective.prefix(61)) + "..." : task.objective
-        lines.append("  \(task.id.prefix(8))  \(userFacingStage(task.stage))  \(worker)  \(objective)")
+        let state = userFacingStage(task.stage).padding(toLength: 8, withPad: " ", startingAt: 0)
+        let worker = (task.worker?.displayName ?? "none").padding(toLength: 8, withPad: " ", startingAt: 0)
+        let objective = clipped(task.objective, limit: 44)
+        lines.append("  \(task.id.prefix(8))  \(state)  \(worker)  \(objective)")
     }
     return lines.joined(separator: "\n")
 }
 
 func printCommonCommands() {
-    print("Commands")
-    print("  jarvis shell")
+    print(sectionTitle("Commands"))
+    print("  jarvis ask \"request\"")
+    print("  jarvis show TASK")
+    print("  jarvis approve TASK")
+    print("  jarvis send claude|codex TASK")
     print("  jarvis status")
+    print("  jarvis close TASK --note \"done\"")
     print("  jarvis history TASK")
 }
 
@@ -956,7 +1242,7 @@ func suggestedCommand(for task: OpenJarvisTaskSummary) -> String {
     case .intake, .retrieve, .assemble, .assignWorker, .validateScope, .checkpointRequirement:
         return "jarvis ask \"...\""
     case .executionReady:
-        return "jarvis close \(task.id.prefix(8)) --note \"done\""
+        return "jarvis show \(task.id.prefix(8))"
     case .completed:
         return "jarvis close \(task.id.prefix(8)) --note \"done\""
     case .writeback:
@@ -1045,9 +1331,9 @@ func loadTask(store: OpenJarvisStore, token: String) throws -> OpenJarvisTask {
 
 func taskSummary(_ task: OpenJarvisTask, label: String) -> String {
     var lines: [String] = []
-    lines.append(label.prefix(1).uppercased() + label.dropFirst())
-    lines.append("  Task    \(task.id.prefix(8))")
-    lines.append("  State   \(visibleLifecycleLabel(for: task.stage))")
-    lines.append("  Worker  \(task.targetWorker?.displayName ?? "unassigned")")
+    lines.append(sectionTitle(String(label.prefix(1).uppercased() + label.dropFirst())))
+    lines.append(kv("Task", String(task.id.prefix(8))))
+    lines.append(kv("State", visibleLifecycleLabel(for: task.stage)))
+    lines.append(kv("Worker", task.targetWorker?.displayName ?? "unassigned"))
     return lines.joined(separator: "\n")
 }

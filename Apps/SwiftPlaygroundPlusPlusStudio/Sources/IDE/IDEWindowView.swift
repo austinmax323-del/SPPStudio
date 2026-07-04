@@ -30,6 +30,10 @@ struct IDEWindowView: View {
             showNewProject = true
         }
         .environmentObject(appEnv.simulatorService)
+        .environmentObject(appEnv.injectionPreflightService)
+        .environmentObject(appEnv.injectionExecutionService)
+        .environmentObject(appEnv.injectionVerificationService)
+        .environmentObject(appEnv.simulatorRunCoordinator)
     }
 
     // MARK: - Split View

@@ -149,38 +149,28 @@ public final class SimulatorService: ObservableObject {
     }
 
     private func queryInstalledApps(deviceID: String) async -> [SimulatorApp] {
-        await withCheckedContinuation { continuation in
-            Task.detached {
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-                process.arguments     = ["simctl", "listapps", deviceID]
-                let pipe = Pipe()
-                process.standardOutput = pipe
-                process.standardError  = Pipe()
-                try? process.run()
-                process.waitUntilExit()
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-
-                var apps: [SimulatorApp] = []
-                if let raw = try? PropertyListSerialization.propertyList(from: data, format: nil),
-                   let dict = raw as? [String: [String: Any]] {
-                    for (bundleID, info) in dict {
-                        guard (info["ApplicationType"] as? String) == "User" else { continue }
-                        let name = (info["CFBundleDisplayName"] as? String)
-                            ?? (info["CFBundleName"] as? String)
-                            ?? bundleID
-                        let ver  = (info["CFBundleShortVersionString"] as? String)
-                            ?? (info["CFBundleVersion"] as? String)
-                            ?? ""
-                        apps.append(SimulatorApp(
-                            id: bundleID, bundleID: bundleID,
-                            displayName: name, version: ver
-                        ))
-                    }
-                }
-                continuation.resume(returning: apps.sorted { $0.displayName < $1.displayName })
+        let result = await ProcessRunner.run(
+            executable: "/usr/bin/xcrun",
+            arguments: ["simctl", "listapps", deviceID]
+        )
+        var apps: [SimulatorApp] = []
+        if let raw = try? PropertyListSerialization.propertyList(from: Data(result.stdout.utf8), format: nil),
+           let dict = raw as? [String: [String: Any]] {
+            for (bundleID, info) in dict {
+                guard (info["ApplicationType"] as? String) == "User" else { continue }
+                let name = (info["CFBundleDisplayName"] as? String)
+                    ?? (info["CFBundleName"] as? String)
+                    ?? bundleID
+                let ver  = (info["CFBundleShortVersionString"] as? String)
+                    ?? (info["CFBundleVersion"] as? String)
+                    ?? ""
+                apps.append(SimulatorApp(
+                    id: bundleID, bundleID: bundleID,
+                    displayName: name, version: ver
+                ))
             }
         }
+        return apps.sorted { $0.displayName < $1.displayName }
     }
 
     // MARK: - Crash Detection
@@ -227,28 +217,19 @@ public final class SimulatorService: ObservableObject {
     // MARK: - Private
 
     private func fetchBootedIDs() async -> Set<String> {
-        await withCheckedContinuation { continuation in
-            Task.detached {
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-                process.arguments     = ["simctl", "list", "devices", "booted", "--json"]
-                let outPipe = Pipe()
-                process.standardOutput = outPipe
-                process.standardError  = Pipe()
-                try? process.run()
-                process.waitUntilExit()
-                let data = outPipe.fileHandleForReading.readDataToEndOfFile()
-                var ids = Set<String>()
-                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let map  = json["devices"] as? [String: [[String: Any]]] {
-                    for list in map.values {
-                        for d in list {
-                            if let udid = d["udid"] as? String { ids.insert(udid) }
-                        }
-                    }
+        let result = await ProcessRunner.run(
+            executable: "/usr/bin/xcrun",
+            arguments: ["simctl", "list", "devices", "booted", "--json"]
+        )
+        var ids = Set<String>()
+        if let json = try? JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any],
+           let map  = json["devices"] as? [String: [[String: Any]]] {
+            for list in map.values {
+                for d in list {
+                    if let udid = d["udid"] as? String { ids.insert(udid) }
                 }
-                continuation.resume(returning: ids)
             }
         }
+        return ids
     }
 }
