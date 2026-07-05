@@ -19,6 +19,11 @@ let package = Package(
                 .product(name: "SPPIPCModels", package: "SPPIPCModels")
             ],
             path: "Sources/SPPDeviceKit"
+        ),
+        .testTarget(
+            name: "SPPDeviceKitTests",
+            dependencies: ["SPPDeviceKit"],
+            path: "Tests/SPPDeviceKitTests"
         )
     ]
 )

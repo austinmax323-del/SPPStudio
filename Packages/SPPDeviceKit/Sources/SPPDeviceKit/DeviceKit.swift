@@ -207,36 +207,45 @@ public actor SimulatorDeviceProvider {
             executableURL: xcrunURL,
             arguments: ["simctl", "list", "devices", "--json"]
         )
+        return Self.parseDevices(from: stdoutData)
+    }
 
-        guard let json = try? JSONSerialization.jsonObject(with: stdoutData) as? [String: Any],
+    /// Parses `simctl list devices --json` output into `SPPDevice`s.
+    ///
+    /// Pure and side-effect free so it can be unit-tested against real simctl
+    /// JSON. A device only needs a `udid` and `name`; it is skipped only when
+    /// *explicitly* marked unavailable (`isAvailable == false`, or the legacy
+    /// `availability == "(unavailable)"` string). Requiring either field — as an
+    /// earlier version did with `availability` — silently dropped every device
+    /// on modern Xcode, which no longer emits that key.
+    static func parseDevices(from data: Data) -> [SPPDevice] {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let devicesMap = json["devices"] as? [String: [[String: Any]]] else {
             return []
         }
 
         var results: [SPPDevice] = []
-
         for (runtimeKey, deviceList) in devicesMap {
-            // Extract the OS version from the runtime identifier, e.g.
-            // "com.apple.CoreSimulator.SimRuntime.iOS-17-0" → "iOS 17.0"
             let systemVersion = parseSystemVersion(from: runtimeKey)
 
             for deviceDict in deviceList {
                 guard
                     let udid = deviceDict["udid"] as? String,
-                    let name = deviceDict["name"] as? String,
-                    let availability = deviceDict["availability"] as? String,
-                    availability != "(unavailable)"
+                    let name = deviceDict["name"] as? String
                 else { continue }
 
-                // Also skip explicitly unavailable devices via isAvailable
                 if let isAvailable = deviceDict["isAvailable"] as? Bool, !isAvailable {
+                    continue
+                }
+                if let availability = deviceDict["availability"] as? String,
+                   availability == "(unavailable)" {
                     continue
                 }
 
                 let modelName = (deviceDict["deviceTypeIdentifier"] as? String)
                     .flatMap { extractModelName(from: $0) } ?? name
 
-                let device = SPPDevice(
+                results.append(SPPDevice(
                     id: udid,
                     name: name,
                     modelName: modelName,
@@ -244,8 +253,7 @@ public actor SimulatorDeviceProvider {
                     connectionKind: .simulator,
                     capabilities: .all,
                     isSimulator: true
-                )
-                results.append(device)
+                ))
             }
         }
 
@@ -270,7 +278,7 @@ public actor SimulatorDeviceProvider {
 
     // MARK: Private helpers
 
-    private func parseSystemVersion(from runtimeKey: String) -> String {
+    private static func parseSystemVersion(from runtimeKey: String) -> String {
         // e.g. "com.apple.CoreSimulator.SimRuntime.iOS-17-0"
         guard let lastComponent = runtimeKey.split(separator: ".").last else {
             return runtimeKey
@@ -282,7 +290,7 @@ public actor SimulatorDeviceProvider {
         return "\(osName) \(versionParts)"
     }
 
-    private func extractModelName(from deviceTypeIdentifier: String) -> String? {
+    private static func extractModelName(from deviceTypeIdentifier: String) -> String? {
         // e.g. "com.apple.CoreSimulator.SimDeviceType.iPhone-15-Pro"
         guard let lastComponent = deviceTypeIdentifier.split(separator: ".").last else {
             return nil
