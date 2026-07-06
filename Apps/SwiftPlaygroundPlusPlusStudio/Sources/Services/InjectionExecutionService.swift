@@ -26,7 +26,7 @@ public struct InjectionExecutionResult: Sendable {
     public var summary: String {
         if succeeded {
             let pidPart = launchedPID.map { " (pid \($0))" } ?? ""
-            return "Launch injection attempted\(pidPart) — dylib passed via DYLD_INSERT_LIBRARIES. "
+            return "Launch injection attempted\(pidPart) — dylib passed via SIMCTL_CHILD_DYLD_INSERT_LIBRARIES. "
                 + "Hook execution NOT yet verified."
         } else {
             return "Launch injection FAILED — exit \(exitCode)."
@@ -58,9 +58,9 @@ public final class InjectionExecutionService: ObservableObject {
 
     /// Runs one launch injection.
     ///
-    /// Command:
-    ///   xcrun simctl launch --terminate-running-process
-    ///     --env DYLD_INSERT_LIBRARIES=<dylib> <udid> <bundleID>
+    /// Environment variables are passed to the simulator child via the
+    /// SIMCTL_CHILD_ prefix in the parent process environment, as required
+    /// by current simctl versions. The --env flag is not supported.
     ///
     /// - Returns: the structured result, also stored in `lastResult`.
     @discardableResult
@@ -71,10 +71,10 @@ public final class InjectionExecutionService: ObservableObject {
     ) async -> InjectionExecutionResult {
         let arguments = [
             "simctl", "launch", "--terminate-running-process",
-            "--env", "DYLD_INSERT_LIBRARIES=\(dylibURL.path)",
             target.udid, bundleID
         ]
-        let commandString = "xcrun " + arguments.joined(separator: " ")
+        let commandString = "SIMCTL_CHILD_DYLD_INSERT_LIBRARIES=\(dylibURL.path) xcrun "
+            + arguments.joined(separator: " ")
 
         guard !isExecuting else {
             // Defensive: never run two injections at once.
@@ -95,10 +95,13 @@ public final class InjectionExecutionService: ObservableObject {
         log("  dylib:  \(dylibURL.path)")
         log("  $ \(commandString)")
 
+        var env = SimulatorToolchain.processEnvironment()
+        env["SIMCTL_CHILD_DYLD_INSERT_LIBRARIES"] = dylibURL.path
+
         let outcome = await ProcessRunner.run(
             executable: "/usr/bin/xcrun",
             arguments: arguments,
-            environment: SimulatorToolchain.processEnvironment()
+            environment: env
         )
         let endedAt = Date()
 
