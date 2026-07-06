@@ -19,7 +19,7 @@ Most tweak development today happens in general-purpose editors that have no awa
 3. Read build errors in the terminal and map them back to source by hand
 4. Copy the resulting `.deb` to a device over SSH to test
 
-SPPStudio brings these steps into one native application: a Logos-aware editor, an integrated Theos build with streaming output, and — on the roadmap — inline diagnostics and on-device deployment. It is open-source infrastructure for the jailbreak development ecosystem, built in the open.
+SPPStudio brings these steps into one native application: a Logos-aware editor, an integrated Theos build with streaming output, and early inline diagnostics. On-device deployment remains on the roadmap. It is open-source infrastructure for the jailbreak development ecosystem, built in the open.
 
 ---
 
@@ -55,13 +55,14 @@ This is not a general-purpose IDE. It is scoped to the specifics of tweak develo
 - **Hover tooltips** — diagnostic messages on hover via native AppKit tracking
 - **Code completion** — `NSTextView`-native keyword, type, and document-symbol suggestions (⌥⎋ / F5)
 
-### Planned (not started)
+### Planned and hardening
 
 | Milestone | Feature |
 |---|---|
 | M7 | `sppctl` CLI build integration, build-config picker, Find & Replace panel |
 | M8 | `SPPDeviceKit` — connected device list and deployment |
-| M8 | `SPPSimulatorHost` — simulator attach and launch |
+| M8 | Simulator/runtime attachment hardening — discovery and preflight exist; end-to-end injection is not yet reliable |
+| M8 | `SPPSimulatorHost` — companion process work, if still needed by the final runtime architecture |
 | M9 | `SPPSourceIndexKit` — background source indexing, jump-to-symbol |
 | M10 | `SPPExportKit` — IPA/deb export pipeline |
 | M11 | `SPPRuntimeKit` — runtime log capture, console tab |

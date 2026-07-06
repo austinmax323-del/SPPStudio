@@ -51,7 +51,7 @@ SPPApp
 
 `AppEnvironment` owns:
 - `ProjectService` — all file system I/O
-- `SimulatorService` — simulator connection (stub)
+- `SimulatorService` — simulator discovery, boot-state tracking, syslog controls, and early install/launch helpers
 - `EventBus` — typed pub/sub for decoupled communication
 - Build state: `buildLog`, `isBuilding`, `lastBuiltPackageURL`
 
