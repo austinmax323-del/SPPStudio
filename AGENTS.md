@@ -7,21 +7,24 @@ packet generation, and audit history.
 This file is **durable context only** — build, layout, architecture rules,
 roles, and safety boundaries. It deliberately does **not** track current
 milestone, sprint, or regression state (that drifts). For OpenJarvis live task
-state, use the Swift `jarvis` CLI from `Tools/sppctl`.
+state, use the Swift `jarvis` CLI from `Tools/sppctl`:
 
 ```bash
-cd Tools/sppctl
-swift run jarvis status
+cd Tools/sppctl && swift run jarvis status
 ```
 
 Canonical live sources:
 - Swift `jarvis` CLI — current operator-facing OpenJarvis control surface
-- Python OpenJarvis — supporting runtime/tooling/memory layer
+- Python OpenJarvis (`~/Developer/openjarvis`) — supporting runtime/tooling/memory layer
 - `SPPStudioDocs/00_CommandCenter/Current Operating State.md` — current cockpit snapshot
 - `SPPStudioDocs/70_SessionContinuity/Sprints/current-sprint.md` — active sprint goal + exit criteria
 - `SPPStudioDocs/50_RuntimeOps/Regressions/regression-tracker.md` — open regressions
 - `SPPStudioDocs/70_SessionContinuity/Milestones/active-milestone-dashboard.md` — current milestone
 - `SPPStudioDocs/20_ArchitectureMemory/ArchitectureSnapshots/` — per-milestone implementation snapshots
+
+`SPPStudioDocs/` is a symlink to the Obsidian vault (`~/Developer/Obsidian`); the
+vault's own `CLAUDE.md` governs work done *inside* the vault. This file governs
+engineering work in this repo.
 
 ---
 
@@ -29,7 +32,7 @@ Canonical live sources:
 
 Current MVP posture:
 - Manual-first and non-autonomous.
-- Single active Codex implementation lane unless explicitly changed by the user.
+- Single active implementation lane unless explicitly changed by the user.
 - Swift `jarvis` CLI is the operator-facing control surface.
 - Python OpenJarvis supports runtime/tooling/memory operations.
 - Obsidian is operational memory and the continuity cockpit.
@@ -43,11 +46,20 @@ Forbidden without explicit user approval:
 
 ---
 
-## Build & Run
+## Build, Test & Run
+
+`xcode-select` on this machine points at CommandLineTools, which cannot build
+this workspace or run XCTest. Prefix builds and tests with `DEVELOPER_DIR`;
+never change the global `xcode-select` setting without asking.
 
 ```bash
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+
 # Primary build (use this)
 swift build --package-path Apps/SwiftPlaygroundPlusPlusStudio
+
+# Package tests (e.g. SPPCore, SPPDeviceKit)
+swift test --package-path Packages/SPPCore
 
 # Full workspace
 xcodebuild -workspace SPPStudio.xcworkspace -scheme SwiftPlaygroundPlusPlusStudio build
@@ -56,7 +68,15 @@ xcodebuild -workspace SPPStudio.xcworkspace -scheme SwiftPlaygroundPlusPlusStudi
 Apps/SwiftPlaygroundPlusPlusStudio/.build/arm64-apple-macosx/debug/SwiftPlaygroundPlusPlusStudio
 ```
 
-Build must pass after every change. No exceptions.
+Build must pass after every change. No exceptions. If a build fails with
+errors unrelated to your change, suspect stale build artifacts before
+suspecting the code — clean the affected package's `.build` and retry once.
+
+Quirks:
+- Unset `CLANG_MODULE_CACHE_PATH` before building if you see sandbox errors;
+  never set it in build scripts.
+- Open `SPPStudio.xcworkspace` (not individual `Package.swift`) for the full
+  scheme list.
 
 ---
 
@@ -77,10 +97,13 @@ Apps/SwiftPlaygroundPlusPlusStudio/   ← main IDE app (build target)
   Sources/DesignSystem/IDETheme.swift ← all colors, fonts, spacing constants
 Packages/
   SPPCore/                            ← project model (SPPProject, SPPFile)
-  SPPSymbolKit/, SPPRuntimeKit/, ...  ← 9 other domain packages (not yet wired)
-Tools/sppctl/                         ← CLI tool
-SPPStudioDocs/                        ← Obsidian vault (DO NOT put code here)
+  SPPSymbolKit/, SPPRuntimeKit/, ...  ← other domain packages
+Tools/sppctl/                         ← CLI tool (jarvis)
+SPPStudioDocs/                        ← Obsidian vault symlink (DO NOT put code here)
 ```
+
+`PROJECT_CONTEXT.md` holds coding standards and the architecture overview;
+read it before writing code, instead of surveying the codebase.
 
 ---
 
@@ -92,14 +115,7 @@ SPPStudioDocs/                        ← Obsidian vault (DO NOT put code here)
 4. **Editor pool** — `EditorAreaView` keeps one `NSScrollView`/`NSTextView` per open tab alive in a `ZStack+ForEach`. Never use `.id(tabID)` to force recreation; use `isActive`/`isHidden` to switch visibility. This preserves undo history, caret, and scroll per tab.
 5. **Package paths are relative** — all `Package.swift` use `path:` references, not version pins.
 6. **macOS 14+ only** — use two-parameter `onChange(of:) { old, new in }` syntax.
-
----
-
-## Known Build Quirks
-
-- Unset `CLANG_MODULE_CACHE_PATH` before building if you see sandbox errors.
-- Do not set `CLANG_MODULE_CACHE_PATH` in any build scripts.
-- Open `SPPStudio.xcworkspace` (not individual `Package.swift`) for full scheme list.
+7. **Simulator dylib injection** — set `SIMCTL_CHILD_DYLD_INSERT_LIBRARIES` in the parent process environment of `xcrun simctl launch`. Never pass `--env DYLD_INSERT_LIBRARIES=...` to `simctl launch`; Xcode 26.5 silently drops it (fixed July 2026 — do not regress).
 
 ---
 
@@ -107,16 +123,13 @@ SPPStudioDocs/                        ← Obsidian vault (DO NOT put code here)
 
 Canonical contracts live in the vault — do not restate or fork them here:
 `SPPStudioDocs/30_AI_Coordination/Role Contracts.md`, `Agent State Board.md`,
-`Mode Router.md`. Summary:
+`Mode Router.md`. If any summary (including this one) disagrees with
+`Role Contracts.md`, the contract wins. As of July 2026:
 
-- **Codex** — current active implementation lane. Makes narrow code/doc changes,
-  runs verification when requested, and keeps commits scoped.
-- **Claude** — optional/manual worker surface only when the user explicitly routes
-  work there. It is not autonomous and is not assumed to be active.
-- **ChatGPT** — prompt architect / systems reasoner. Turns fuzzy goals into
-  role-specific prompts and workflows. Does **not** execute code or own runtime state.
-- **Watchdog** — passive. Summarizes output and flags drift. Never executes,
-  sends, or mutates project code.
+- **Claude** — active implementation lane: narrow code/doc changes, then build + verify.
+- **Codex** — reviews and supervises: scope, ownership, exit criteria.
+- **ChatGPT** — prompt architect / systems reasoner. Does **not** execute code or own runtime state.
+- **Watchdog** — passive. Summarizes output and flags drift. Never executes, sends, or mutates project code.
 
 Use the smallest operating mode that safely completes the task (see `Mode Router.md`).
 
@@ -124,8 +137,9 @@ Use the smallest operating mode that safely completes the task (see `Mode Router
 
 ## Safety Boundaries — forbidden / unsafe to touch casually
 
-Full map: `SPPStudioDocs/00_CommandCenter/Unsafe Mutation Zones.md`. Never do the
-following without an explicit invariant target and immediate verification:
+Full map: `SPPStudioDocs/00_CommandCenter/_meta/Unsafe Mutation Zones.md`.
+Never do the following without an explicit invariant target and immediate
+verification:
 
 - Recreate `NSTextView` / `NSScrollView` / `NSLayoutManager` / `NSTextStorage` /
   `UndoManager` for refresh — this breaks pooled-editor identity, undo, caret, and scroll.
@@ -138,8 +152,8 @@ following without an explicit invariant target and immediate verification:
 - Treat `RuntimeInvariantInspector` output as routing or ownership truth — it is
   advisory only.
 
-Source/automation expansion and any runtime/editor change require **explicit user
-approval**.
+Source/automation expansion and any runtime/editor change require **explicit
+user approval**.
 
 ---
 
@@ -155,7 +169,6 @@ Config: .mcp.json (repo root) — local only, gitignored; never commit the token
 ```
 
 Read `SPPStudioDocs/Home.md` for navigation. Write regressions/summaries via:
-
 - OpenJarvis task history and audit commands in the Swift `jarvis` CLI.
 - Manual Obsidian notes in the relevant continuity, runtime, or memory docs.
 - Python OpenJarvis writeback only through explicit manual commands.
@@ -181,4 +194,5 @@ Full rules: `SPPStudioDocs/40_PromptEngineering/AntiLoopPrompts/anti-loop-rules.
 2. `SPPStudioDocs/50_RuntimeOps/Regressions/regression-tracker.md` — what not to break
 3. `PROJECT_CONTEXT.md` — coding standards
 
-Then build. Then implement.
+Then build. Then implement. (The vault CLAUDE.md's longer read order applies
+only to vault-content sessions, not engineering sessions here.)
