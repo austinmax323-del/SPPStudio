@@ -34,7 +34,7 @@ This is not production software. It is an early preview being developed in the o
 | Device connectivity | **Planned (M8)** | SPPDeviceKit models exist; on-hardware deployment is not implemented |
 | Simulator discovery | **Partially implemented** | Simulator list, boot state, syslog controls, and preflight UI exist |
 | Simulator dylib build | **Partially implemented** | Manual simulator dylib build works; app pipeline is being hardened |
-| Runtime injection | **Blocked / hardening** | Current launch injection path needs the `SIMCTL_CHILD_DYLD_INSERT_LIBRARIES` fix before it can be considered working |
+| Runtime injection | **Partial / hardening** | Launch path now uses `SIMCTL_CHILD_DYLD_INSERT_LIBRARIES`; end-to-end hook behavior still needs broader validation |
 | Runtime invariant dump | **Working / manual** | Debug menu writes a runtime health snapshot for editor/routing diagnostics |
 | Source indexing | **Planned (M9)** | SPPSourceIndexKit stub; not integrated |
 | Export pipeline | **Planned (M10)** | SPPExportKit stub; not integrated |
@@ -67,8 +67,8 @@ Current tested verification:
 
 - **Limited automated tests.** SPPCore has focused tests for diagnostics/parser/path resolution, but the UI/editor/simulator layers are still mostly verified by manual smoke testing.
 - **Inspector is basic.** The right panel shows project/build metadata, but richer symbol and diagnostic detail are still future work.
-- **Simulator/runtime attachment is not complete.** Discovery and preflight exist, and simulator dylib builds have been verified manually, but end-to-end injection is blocked until the launch environment bug is fixed.
-- **Known critical simulator injection bug.** The injection command must pass `DYLD_INSERT_LIBRARIES` as `SIMCTL_CHILD_DYLD_INSERT_LIBRARIES` in the child environment. The older `simctl launch --env DYLD_INSERT_LIBRARIES=...` form fails on the tested Xcode 26.5 toolchain.
+- **Simulator/runtime attachment is not complete.** Discovery and preflight exist, and simulator dylib builds have been verified manually, but end-to-end injection still needs a booted simulator target and a valid simulator dylib to be confirmed working.
+- **Simulator injection uses SIMCTL_CHILD_ prefix.** The injection command passes `DYLD_INSERT_LIBRARIES` via `SIMCTL_CHILD_DYLD_INSERT_LIBRARIES` in the parent process environment — the `simctl launch --env` form is not supported by current simctl versions. This is now the implemented approach.
 - **Build-from-Simulator-tab UX is weak.** A build can succeed while the console remains on the Simulator tab, hiding the build log from the user.
 - **Preflight failure visibility is weak.** The panel can summarize a failed check while the failing row is below the visible area.
 - **Find & Replace** is keyboard-shortcut wired but opens nothing yet.

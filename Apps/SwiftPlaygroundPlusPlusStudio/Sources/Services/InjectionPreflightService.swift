@@ -184,10 +184,10 @@ public final class InjectionPreflightService: ObservableObject {
             if dylibExists {
                 checks.append(.init(
                     name:   "Injection method",
-                    detail: "DYLD_INSERT_LIBRARIES=\(dylib.lastPathComponent) via xcrun simctl launch --env",
+                    detail: "SIMCTL_CHILD_DYLD_INSERT_LIBRARIES=\(dylib.lastPathComponent) (parent-env prefix)",
                     status: .pass
                 ))
-                log("✓ Injection: DYLD_INSERT_LIBRARIES via simctl launch --env")
+                log("✓ Injection: SIMCTL_CHILD_DYLD_INSERT_LIBRARIES via parent environment")
 
                 // ── Check 8b: dylib platform / architecture (read-only) ───────────
                 // Arch alone can't distinguish device vs simulator on Apple Silicon
@@ -218,8 +218,8 @@ public final class InjectionPreflightService: ObservableObject {
 
         if usable && hasBundleID && dylibPlatformOK, let dylib = dylibURL,
            FileManager.default.fileExists(atPath: dylib.path) {
-            let cmd = "xcrun simctl launch --terminate-running-process"
-                + " --env DYLD_INSERT_LIBRARIES=\(dylib.path)"
+            let cmd = "SIMCTL_CHILD_DYLD_INSERT_LIBRARIES=\(dylib.path)"
+                + " xcrun simctl launch --terminate-running-process"
                 + " \(target.udid) \(trimmedBundleID)"
             checks.append(.init(
                 name:   "Injection command (ready)",
