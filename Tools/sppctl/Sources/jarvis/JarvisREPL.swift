@@ -39,9 +39,10 @@ struct OpenJarvisREPL {
                 }
             } catch {
                 printSection("error")
-                print("  \(error.localizedDescription)")
+                print(kv("State", "[err] failed"))
+                print(kv("Detail", error.localizedDescription))
                 if let hint = lifecycleGuidance(for: error) {
-                    print("  \(hint)")
+                    print(kv("Hint", hint))
                 }
             }
         }
@@ -52,7 +53,8 @@ struct OpenJarvisREPL {
         if isPasteNoise(line) {
             if !pasteBlockActive {
                 pasteBlockActive = true
-                print("Use ask \"...\" to turn pasted notes into a packet.")
+                printSection("Paste Detected")
+                print(kv("Try", "ask \"...\" to turn pasted notes into a packet"))
             }
             return false
         }
@@ -88,6 +90,12 @@ struct OpenJarvisREPL {
             try handleContinue(tokens)
         case "send":
             try handleSend(tokens)
+        case "approve", "ap":
+            try approve(tokens)
+        case "reject", "rej":
+            try reject(tokens)
+        case "edit":
+            try edit(tokens)
         case "recover", "rec":
             try recover(tokens)
         case "retrieve", "r":
@@ -145,13 +153,11 @@ struct OpenJarvisREPL {
     }
 
     private mutating func handleAsk(_ tokens: [String]) throws {
-        let noCopyFlag = tokens.contains("--no-copy")
-        let copyFlag = tokens.contains("--copy") || !noCopyFlag
         let requestTokens = tokens.filter { $0 != "--copy" && $0 != "--no-copy" }
         let request = requestTokens.joined(separator: " ")
         guard !request.isEmpty else {
             printSection("Ask")
-            print("  ask \"review current retrieval flow for codex\"")
+            print(kv("Try", "ask \"review current retrieval flow for codex\""))
             return
         }
         let workerStr = inferWorker(from: request) ?? "codex"
@@ -184,25 +190,16 @@ struct OpenJarvisREPL {
             limit: 5,
             scopeHint: scopes.isEmpty ? nil : scopes
         )
-        printSection("Created")
-        print("  Task     \(task.id.prefix(8))")
-        print("  Worker   \(OpenJarvisWorkerKind(rawValue: workerStr)?.displayName ?? workerStr)")
-        print("  Context  \(packet.retrievedContext.count) notes")
-        if copyFlag {
-            try copyToClipboard(packet.markdown)
-            print("")
-            print("  Copied packet to clipboard.")
-        } else {
-            print("")
-            print("  Next     packet --copy")
-        }
+        try recordApprovalRequested(store: store, taskID: task.id, packetText: packet.markdown)
+        let storedTask = try store.fetchTask(id: task.id) ?? task
+        print(renderApprovalReview(task: storedTask, packetText: packet.markdown, approval: .pending))
     }
 
     private mutating func handleGo(_ tokens: [String]) throws {
         let request = tokens.joined(separator: " ")
         guard !request.isEmpty else {
             printSection("go")
-            print("  ask \"review retrieval architecture for claude\"")
+            print(kv("Try", "ask \"review retrieval architecture for claude\""))
             return
         }
         let workerStr = inferWorker(from: request) ?? "codex"
@@ -238,18 +235,18 @@ struct OpenJarvisREPL {
         )
         try copyToClipboard(packet.markdown)
         printSection("task ready")
-        print("  task: \(task.id.prefix(8))")
-        print("  worker: \(workerStr)")
-        print("  scope: \(scopeLabel)")
-        print("  context: \(packet.retrievedContext.count) hits")
-        print("  packet copied to clipboard")
+        print(kv("Task", String(task.id.prefix(8))))
+        print(kv("Worker", workerStr))
+        print(kv("Scope", scopeLabel))
+        print(kv("Context", "\(packet.retrievedContext.count) hits"))
+        print(kv("Packet", "[ok] copied to clipboard"))
     }
 
     private mutating func handleAuto(_ tokens: [String]) throws {
         let request = tokens.joined(separator: " ")
         guard !request.isEmpty else {
             printSection("auto")
-            print("  ask \"review current Jarvis boundary for codex\"")
+            print(kv("Try", "ask \"review current Jarvis boundary for codex\""))
             return
         }
         let workerStr = inferWorker(from: request) ?? "codex"
@@ -278,7 +275,7 @@ struct OpenJarvisREPL {
             )
         )
         currentTaskID = task.id
-        print("  task: \(task.id.prefix(8))")
+        print(kv("Task", String(task.id.prefix(8))))
 
         printSection("auto  2/4  retrieving context")
         var queryParts: [String] = [objective]
@@ -288,11 +285,11 @@ struct OpenJarvisREPL {
         queryParts.append(contentsOf: neededMemory)
         let retrievalQuery = queryParts.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.joined(separator: " ")
         let hits = try store.retrieveContext(for: task.id, query: retrievalQuery, scopeHint: scopes.isEmpty ? nil : scopes, limit: 8)
-        print("  hits: \(hits.count)")
+        print(kv("Hits", "\(hits.count)"))
 
         printSection("auto  3/4  generating packet")
         let packet = try store.generatePacket(for: task.id, role: try parseWorker(workerStr), limit: 5, scopeHint: nil)
-        print("  context: \(packet.retrievedContext.count) hits")
+        print(kv("Context", "\(packet.retrievedContext.count) hits"))
 
         printSection("auto  4/4  copying to clipboard")
         try copyToClipboard(packet.markdown)
@@ -300,16 +297,16 @@ struct OpenJarvisREPL {
             "worker": workerStr,
             "hit_count": "\(packet.retrievedContext.count)"
         ])
-        print("  done")
+        print(kv("Packet", "[ok] copied to clipboard"))
         print("")
         printSection("ready")
-        print("  task: \(task.id.prefix(8))")
-        print("  worker: \(OpenJarvisWorkerKind(rawValue: workerStr)?.displayName ?? workerStr)")
-        print("  context hits: \(packet.retrievedContext.count)")
-        print("  packet copied to clipboard")
+        print(kv("Task", String(task.id.prefix(8))))
+        print(kv("Worker", OpenJarvisWorkerKind(rawValue: workerStr)?.displayName ?? workerStr))
+        print(kv("Context", "\(packet.retrievedContext.count) hits"))
+        print(kv("Packet", "[ok] copied to clipboard"))
         print("")
-        print("  next: paste into \(OpenJarvisWorkerKind(rawValue: workerStr)?.displayName ?? workerStr)")
-        print("  then: close \(task.id.prefix(8)) --note \"done\"")
+        print(kv("Next", "paste into \(OpenJarvisWorkerKind(rawValue: workerStr)?.displayName ?? workerStr)"))
+        print(kv("Then", "close \(task.id.prefix(8)) --note \"done\""))
     }
 
     private mutating func handleResume(_ tokens: [String]) throws {
@@ -318,8 +315,8 @@ struct OpenJarvisREPL {
         let allTasks = try store.listTasks()
         guard let summary = allTasks.first(where: { $0.completionState == .open }) ?? allTasks.first else {
             printSection("resume")
-            print("  no tasks found")
-            print("  suggested: auto <your request>")
+            print(emptyState("no tasks found"))
+            print(kv("Try", "ask \"your request\""))
             return
         }
         currentTaskID = summary.id
@@ -329,10 +326,10 @@ struct OpenJarvisREPL {
         try copyToClipboard(full)
         print("")
         printSection("full recovery copied to clipboard")
-        print("  task: \(summary.id.prefix(8))")
-        print("  state: \(visibleLifecycleLabel(for: summary.stage))")
-        print("  worker: \(summary.worker?.displayName ?? "unassigned")")
-        print("  next: paste into \(summary.worker?.displayName ?? "your worker")")
+        print(kv("Task", String(summary.id.prefix(8))))
+        print(kv("State", visibleLifecycleLabel(for: summary.stage)))
+        print(kv("Worker", summary.worker?.displayName ?? "unassigned"))
+        print(kv("Next", "paste into \(summary.worker?.displayName ?? "your worker")"))
     }
 
     private mutating func handleContinue(_ tokens: [String]) throws {
@@ -347,8 +344,8 @@ struct OpenJarvisREPL {
             taskID = latest.id
         } else {
             printSection("continue")
-            print("  no open tasks")
-            print("  suggested: auto <your request>  or  recover --session")
+            print(emptyState("no open tasks"))
+            print(kv("Try", "ask \"your request\"  or  recover --session"))
             return
         }
         guard let task = try store.fetchTask(id: taskID) else {
@@ -370,13 +367,13 @@ struct OpenJarvisREPL {
         try copyToClipboard(content)
         print("")
         printSection("copied \(mode) to clipboard")
-        print("  task: \(taskID.prefix(8))")
-        print("  state: \(visibleLifecycleLabel(for: task.stage))")
-        print("  worker: \(task.targetWorker?.displayName ?? "unassigned")")
+        print(kv("Task", String(taskID.prefix(8))))
+        print(kv("State", visibleLifecycleLabel(for: task.stage)))
+        print(kv("Worker", task.targetWorker?.displayName ?? "unassigned"))
         if mode == "packet" {
-            print("  next: paste packet into \(task.targetWorker?.displayName ?? "your worker")")
+            print(kv("Next", "paste packet into \(task.targetWorker?.displayName ?? "your worker")"))
         } else {
-            print("  next: share context with \(task.targetWorker?.displayName ?? "your worker")")
+            print(kv("Next", "share context with \(task.targetWorker?.displayName ?? "your worker")"))
         }
     }
 
@@ -384,8 +381,8 @@ struct OpenJarvisREPL {
         let parsed = try parseREPLFlags(tokens)
         guard !tokens.isEmpty else {
             printSection("Send")
-            print("  send claude [task]")
-            print("  send codex [task]")
+            print(kv("Try", "send claude [task]"))
+            print(kv("Try", "send codex [task]"))
             return
         }
         let rawPositionals = parsed.positionals
@@ -433,11 +430,13 @@ struct OpenJarvisREPL {
             let scopeStr = scopes.first?.rawValue ?? "coordination"
             let objective = fullLine.prefix(1).uppercased() + fullLine.dropFirst()
             printSection("Looks like a request")
-            print("  ask \"\(objective)\"")
-            print("  Worker  \(OpenJarvisWorkerKind(rawValue: workerStr)?.displayName ?? workerStr)")
-            print("  Scope   \(scopeStr)")
+            print(kv("Try", "ask \"\(objective)\""))
+            print(kv("Worker", OpenJarvisWorkerKind(rawValue: workerStr)?.displayName ?? workerStr))
+            print(kv("Scope", scopeStr))
         } else {
-            print("Unknown command: \(command). Try help.")
+            printSection("Unknown Command")
+            print(kv("Input", command))
+            print(kv("Try", "help"))
         }
     }
 
@@ -476,11 +475,11 @@ struct OpenJarvisREPL {
         let workerLabel = task.targetWorker?.rawValue ?? "unassigned"
         let scopeLabel = task.neededMemory.first ?? "none"
         printSection("Created")
-        print("  Task     \(task.id.prefix(8))")
-        print("  Worker   \(workerLabel)")
-        print("  Context  \(scopeLabel)")
+        print(kv("Task", String(task.id.prefix(8))))
+        print(kv("Worker", workerLabel))
+        print(kv("Context", scopeLabel))
         print("")
-        print("  Next     packet --copy")
+        print(kv("Next", "packet --copy"))
     }
 
     private mutating func retrieve(_ tokens: [String]) throws {
@@ -564,7 +563,7 @@ struct OpenJarvisREPL {
         switch task.stage {
         case .writeback:
             printSection("Archived")
-            print("  Task  \(taskID.prefix(8))")
+            print(kv("Task", String(taskID.prefix(8))))
         case .completed:
             let final = try store.writebackTask(id: taskID, note: note)
             currentTaskID = final.id
@@ -621,10 +620,10 @@ struct OpenJarvisREPL {
 
     private func renderTaskBrief(_ task: OpenJarvisTask) -> String {
         var lines: [String] = []
-        lines.append(visibleLifecycleLabel(for: task.stage) == "archived" ? "Archived" : "Task")
-        lines.append("  ID      \(task.id.prefix(8))")
-        lines.append("  State   \(visibleLifecycleLabel(for: task.stage))")
-        lines.append("  Worker  \(task.targetWorker?.displayName ?? "unassigned")")
+        lines.append(sectionTitle(visibleLifecycleLabel(for: task.stage) == "archived" ? "Archived" : "Task"))
+        lines.append(kv("ID", String(task.id.prefix(8))))
+        lines.append(kv("State", visibleLifecycleLabel(for: task.stage)))
+        lines.append(kv("Worker", task.targetWorker?.displayName ?? "unassigned"))
         return lines.joined(separator: "\n")
     }
 
@@ -649,7 +648,43 @@ struct OpenJarvisREPL {
         printAutoSelectionIfNeeded(parsed: parsed, taskID: taskID)
         let task = try loadTask(store: store, token: taskID)
         currentTaskID = task.id
-        print(render(task: task))
+        if let packetText = task.packetText, !packetText.isEmpty {
+            let approval = try approvalState(store: store, taskID: task.id)
+            print(renderApprovalReview(task: task, packetText: packetText, approval: approval))
+        } else {
+            print(render(task: task))
+        }
+    }
+
+    private mutating func approve(_ tokens: [String]) throws {
+        let parsed = try parseREPLFlags(tokens)
+        let store = try OpenJarvisStore(databaseURL: parsed.databaseURL ?? databaseURL)
+        let taskID = try selectedTaskID(store: store, parsed: parsed, action: "approve")
+        printAutoSelectionIfNeeded(parsed: parsed, taskID: taskID)
+        let task = try approveTask(store: store, token: taskID, copy: !parsed.hasFlag("no-copy"))
+        currentTaskID = task.id
+        print(renderApprovalDecision(task: task, state: .approved, copied: !parsed.hasFlag("no-copy")))
+    }
+
+    private mutating func reject(_ tokens: [String]) throws {
+        let parsed = try parseREPLFlags(tokens)
+        let store = try OpenJarvisStore(databaseURL: parsed.databaseURL ?? databaseURL)
+        let taskID = try selectedTaskID(store: store, parsed: parsed, action: "reject")
+        printAutoSelectionIfNeeded(parsed: parsed, taskID: taskID)
+        let task = try rejectTask(store: store, token: taskID, note: parsed.value("note"))
+        currentTaskID = task.id
+        print(renderApprovalDecision(task: task, state: .rejected, copied: false))
+    }
+
+    private mutating func edit(_ tokens: [String]) throws {
+        let parsed = try parseREPLFlags(tokens)
+        let store = try OpenJarvisStore(databaseURL: parsed.databaseURL ?? databaseURL)
+        let taskID = try selectedTaskID(store: store, parsed: parsed, action: "edit")
+        printAutoSelectionIfNeeded(parsed: parsed, taskID: taskID)
+        let task = try editTaskPacket(store: store, token: taskID)
+        currentTaskID = task.id
+        let approval = try approvalState(store: store, taskID: task.id)
+        print(renderApprovalReview(task: task, packetText: task.packetText ?? "", approval: approval))
     }
 
     private mutating func openTask(_ tokens: [String]) throws {
@@ -666,7 +701,7 @@ struct OpenJarvisREPL {
         let target = path.hasPrefix("/") ? URL(fileURLWithPath: path) : vault.appendingPathComponent(path)
         try openURL(target)
         printSection("opened")
-        print("  \(target.path)")
+        print(kv("Path", target.path))
     }
 
     private func selectedTaskID(store: OpenJarvisStore, parsed: REPLParsedArguments, action: String) throws -> String {
@@ -684,7 +719,7 @@ struct OpenJarvisREPL {
 
     private func printAutoSelectionIfNeeded(parsed: REPLParsedArguments, taskID: String) {
         guard parsed.positionals.isEmpty else { return }
-        print("Task \(taskID.prefix(8))")
+        print(kv("Task", "\(taskID.prefix(8)) selected"))
     }
 
     private func printSessionHistory() {
@@ -736,18 +771,20 @@ func printStartupDashboard(databaseURL: URL?) throws {
         recentTasks = Array(allTasks.prefix(3))
     }
 
-    print("Jarvis")
-    print("  Active  \(openCount)")
-    print("  Vault   \(vaultStatus.resolved ? "ready" : "missing")")
+    print(sectionTitle("Jarvis Command Center"))
+    print(kv("Store", "\(statusBadge(snapshot.databaseExists)) \(snapshot.databaseExists ? "ready" : "not created")"))
+    print(kv("Vault", "\(statusBadge(vaultStatus.resolved)) \(vaultStatus.resolved ? "ready" : "missing")"))
+    print(kv("Active", "\(openCount) open tasks"))
     if recentTasks.isEmpty {
-        print("  Latest  none")
+        print(kv("Latest", "none"))
     } else {
         let latest = recentTasks[0]
-        let obj = latest.objective.count > 48 ? String(latest.objective.prefix(45)) + "..." : latest.objective
-        print("  Latest  \(latest.id.prefix(8)) \(visibleLifecycleLabel(for: latest.stage))  \(obj)")
+        let obj = clipped(latest.objective, limit: 48)
+        print(kv("Latest", "\(latest.id.prefix(8))  \(visibleLifecycleLabel(for: latest.stage))  \(obj)"))
     }
     print("")
-    print("  ask | send | status | close | history")
+    print("  Commands  ask | send | status | close | history")
+    print("  Help      help --advanced")
 }
 
 func printStatus(databaseURL: URL?) throws {
@@ -758,16 +795,16 @@ func printNext(databaseURL: URL?) throws {
     let snapshot = try OpenJarvisStatusReader.read(databaseURL: databaseURL)
     guard snapshot.databaseExists else {
         printSection("next")
-        print("  database does not exist yet")
-        print("  suggested: new \"your task\"")
+        print(emptyState("database does not exist yet"))
+        print(kv("Try", "ask \"your task\""))
         return
     }
 
     let store = try OpenJarvisStore(databaseURL: databaseURL)
     guard let task = try store.listTasks().first(where: { $0.completionState == .open }) else {
         printSection("next")
-        print("  no open tasks")
-        print("  suggested: go <your request>  or  recover --session")
+        print(emptyState("no open tasks"))
+        print(kv("Try", "ask \"your request\"  or  recover --session"))
         return
     }
 
@@ -778,35 +815,37 @@ func printNext(databaseURL: URL?) throws {
         suggested = suggestedCommand(for: task).replacingOccurrences(of: "jarvis ", with: "")
     }
     printSection("next")
-    print("  task: \(task.id.prefix(8))")
-    print("  objective: \(task.objective)")
-    print("  status: \(userFacingStage(task.stage))")
-    print("  worker: \(task.worker?.displayName ?? "unassigned")")
-    print("  suggested: \(suggested)")
+    print(kv("Task", String(task.id.prefix(8))))
+    print(kv("Goal", clipped(task.objective, limit: 72)))
+    print(kv("State", userFacingStage(task.stage)))
+    print(kv("Worker", task.worker?.displayName ?? "unassigned"))
+    print(kv("Next", suggested))
 }
 
 func printREPLHelp(_ tokens: [String] = []) {
     if tokens.contains("--advanced") {
         printSection("Advanced")
-        print("  retrieve [task] [--scope runtime]")
-        print("  packet [task] [--copy]")
-        print("  recover [task] [--copy]")
-        print("  list | show | open")
-        print("  done | writeback")
-        print("  new \"task\" --worker codex --memory coordination")
+        print(kv("Context", "retrieve [task] [--scope runtime]"))
+        print(kv("Packet", "packet [task] [--copy]"))
+        print(kv("Recover", "recover [task] [--copy]"))
+        print(kv("Inspect", "list | show | open"))
+        print(kv("Archive", "done | writeback"))
+        print(kv("Create", "new \"task\" --worker codex --memory coordination"))
         print("")
-        print("  Legacy aliases still work: go, auto, resume, continue, next.")
+        print(kv("Aliases", "go, auto, resume, continue, next"))
         return
     }
 
     printSection("Commands")
-    print("  ask \"request\"             create context and copy packet")
-    print("  send claude|codex [task]   run worker, save artifact")
-    print("  status                     show active work")
-    print("  close [task] --note done   archive task")
-    print("  history [task]             show audit trail")
+    print(kv("ask", "\"request\"             create review packet"))
+    print(kv("show", "[task]                inspect generated prompt"))
+    print(kv("approve", "[task]              approve and copy packet"))
+    print(kv("send", "claude|codex [task]   run approved worker"))
+    print(kv("status", "show active work"))
+    print(kv("close", "[task] --note done   archive task"))
+    print(kv("history", "[task]             show audit trail"))
     print("")
-    print("  help --advanced            show internal utilities")
+    print(kv("More", "help --advanced"))
 }
 
 struct WorkerSendResult {
@@ -869,6 +908,11 @@ func performWorkerSend(
     } else {
         let packet = try store.generatePacket(for: taskID, role: worker, limit: 5, scopeHint: nil)
         packetText = packet.markdown
+        try recordApprovalRequested(store: store, taskID: taskID, packetText: packetText)
+    }
+
+    if !dryRun {
+        try requireApprovalForSend(store: store, taskID: taskID)
     }
 
     let workerArgs: [String]
@@ -922,20 +966,20 @@ func performWorkerSend(
     let beforeGit = captureGitSnapshot(cwd: resolvedCwd)
 
     printSection("Send to \(worker.displayName)?")
-    print("  Task    \(taskID.prefix(8))")
-    print("  Output  WorkerRuns/\(outputFileName)")
+    print(kv("Task", String(taskID.prefix(8))))
+    print(kv("Output", "WorkerRuns/\(outputFileName)"))
     if verbose || dryRun {
         print("")
-        print("  cwd     \(resolvedCwd)")
-        if let v = resolvedVault { print("  vault   \(v)") }
-        print("  packet  \(packetText.count) chars")
-        print("  cmd     \(displayCmd)")
-        print("  git     \(beforeGit.isRepo ? "repo" : "not a repo")")
+        print(kv("CWD", resolvedCwd))
+        if let v = resolvedVault { print(kv("Vault", v)) }
+        print(kv("Packet", "\(packetText.count) chars"))
+        print(kv("Command", displayCmd))
+        print(kv("Git", beforeGit.isRepo ? "repo" : "not a repo"))
     }
 
     if dryRun {
         print("")
-        print("  Dry run only. No worker launched.")
+        print(kv("State", "[ok] dry run only; no worker launched"))
         return WorkerSendResult(taskID: taskID, outputFileName: nil)
     }
 
@@ -944,7 +988,7 @@ func performWorkerSend(
         print("  Run? [y/N] ", terminator: "")
         guard let answer = readLine(strippingNewline: true)?.trimmingCharacters(in: .whitespaces).lowercased(),
               answer == "y" || answer == "yes" else {
-            print("  Aborted.")
+            print(kv("State", "[warn] aborted"))
             return WorkerSendResult(taskID: taskID, outputFileName: nil)
         }
     }
@@ -1005,15 +1049,15 @@ func performWorkerSend(
 
     print("")
     printSection(exitCode == 0 ? "Saved" : "Worker exited \(exitCode)")
-    print("  Exit    \(exitCode)")
-    print("  Output  WorkerRuns/\(outputFileName)")
+    print(kv("Exit", exitCode == 0 ? "[ok] 0" : "[err] \(exitCode)"))
+    print(kv("Output", "WorkerRuns/\(outputFileName)"))
     if !stdout.isEmpty {
         let previewLines = usefulPreview(stdout).components(separatedBy: "\n").prefix(6)
         print("")
         for line in previewLines { print("  │ \(line)") }
     }
     print("")
-    print("  Next    review diff, then close \(taskID.prefix(8)) --note \"done\"")
+    print(kv("Next", "review diff, then close \(taskID.prefix(8)) --note \"done\""))
     return WorkerSendResult(taskID: taskID, outputFileName: outputFileName)
 }
 
@@ -1370,7 +1414,7 @@ func openURL(_ url: URL) throws {
 }
 
 func printSection(_ title: String) {
-    print(title)
+    print(sectionTitle(title))
 }
 
 private func readPrompt(_ prompt: String) -> String? {

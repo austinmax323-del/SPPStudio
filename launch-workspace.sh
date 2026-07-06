@@ -89,7 +89,7 @@ echo "4. Current milestone"
 echo ""
 
 echo "5. Recommended next prompt"
-echo "prompt: SPPStudioDocs/AgentPrompts/continue-current-sprint.md"
+echo "prompt: SPPStudioDocs/40_PromptEngineering/AgentPrompts/continue-current-sprint.md"
 echo "dashboard: SPPStudioDocs/00_CommandCenter/Engineering Dashboard.md"
 echo "review context: ./script/spp-workspace.sh review-context"
 echo ""

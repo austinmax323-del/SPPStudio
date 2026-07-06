@@ -210,9 +210,18 @@ unsafe_to_continue() {
 }
 
 recommended_next_action() {
-  local file="$VAULT_DIR/00_CommandCenter/recommended-next-action.md"
+  local file="$VAULT_DIR/00_CommandCenter/recommended-next-action.md" action
   if [ -f "$file" ]; then
-    grep -m 1 -E '^[^#[:space:]]' "$file" 2>/dev/null && return 0
+    action="$(awk '
+      /^[[:space:]]*$/ { next }
+      /^[[:space:]]*#/ { next }
+      /^[[:space:]]*>/ { next }
+      { print; exit }
+    ' "$file" 2>/dev/null || true)"
+    if [ -n "$action" ]; then
+      printf "%s\n" "$action"
+      return 0
+    fi
   fi
   echo "Inline diagnostics foundation: BuildService parsed events -> FileDiagnosticsStore -> editor consumers."
 }
@@ -223,12 +232,12 @@ next_task() {
   echo "- $(recommended_next_action)"
   echo ""
   echo "Suggested Claude prompt"
-  echo "- SPPStudioDocs/AgentPrompts/continue-current-sprint.md"
+  echo "- SPPStudioDocs/40_PromptEngineering/AgentPrompts/continue-current-sprint.md"
   echo ""
   echo "Architecture reminders"
-  echo "- Read SPPStudioDocs/Architecture Contracts.md"
-  echo "- Read SPPStudioDocs/Editor Invariants.md"
-  echo "- Check SPPStudioDocs/Known Bad Patterns.md"
+  echo "- Read SPPStudioDocs/20_ArchitectureMemory/Architecture Contracts.md"
+  echo "- Read SPPStudioDocs/20_ArchitectureMemory/Editor Invariants.md"
+  echo "- Check SPPStudioDocs/20_ArchitectureMemory/Known Bad Patterns.md"
   echo ""
   echo "Unresolved regression warnings"
   unresolved_regression_summary
@@ -274,7 +283,7 @@ review_context() {
   architecture_warnings
   echo ""
   echo "Known failure mode entrypoint"
-  echo "- SPPStudioDocs/Known Failure Modes.md"
+  echo "- SPPStudioDocs/20_ArchitectureMemory/Known Failure Modes.md"
   echo ""
   echo "Review helper"
   echo "- ./script/review-last-change.sh"
@@ -284,9 +293,9 @@ verification_header() {
   local title="$1"
   echo "$title"
   echo ""
-  echo "Flow reference: SPPStudioDocs/VerificationFlows/README.md"
-  echo "Contracts: SPPStudioDocs/Editor Invariants.md, SPPStudioDocs/Architecture Contracts.md"
-  echo "Failure modes: SPPStudioDocs/Known Failure Modes.md"
+  echo "Flow reference: SPPStudioDocs/60_DeliveryValidation/VerificationFlows/README.md"
+  echo "Contracts: SPPStudioDocs/20_ArchitectureMemory/Editor Invariants.md, SPPStudioDocs/20_ArchitectureMemory/Architecture Contracts.md"
+  echo "Failure modes: SPPStudioDocs/20_ArchitectureMemory/Known Failure Modes.md"
   echo ""
 }
 
@@ -464,8 +473,8 @@ inspection_header() {
   echo ""
   echo "Live dump: $RUNTIME_DUMP_FILE"
   echo "Trigger in app: Debug > Dump Runtime Invariants (⌃⌥⌘I)"
-  echo "Contracts: SPPStudioDocs/Editor Invariants.md, SPPStudioDocs/Architecture Contracts.md"
-  echo "Failure modes: SPPStudioDocs/Known Failure Modes.md"
+  echo "Contracts: SPPStudioDocs/20_ArchitectureMemory/Editor Invariants.md, SPPStudioDocs/20_ArchitectureMemory/Architecture Contracts.md"
+  echo "Failure modes: SPPStudioDocs/20_ArchitectureMemory/Known Failure Modes.md"
   echo ""
 }
 
@@ -908,13 +917,13 @@ Purpose: restore operational context fast enough to keep editor/runtime invarian
 - [[../40_PromptEngineering/Prompt Cockpit]]
 
 ## Canonical Truth
-- [[../Sprints/current-sprint|Current Sprint]]
-- [[../ImplementationLog/active-implementation|Active Implementation]]
-- [[../Regressions/regression-tracker|Regression Tracker]]
-- [[../Architecture Contracts]]
-- [[../Editor Invariants]]
-- [[../Known Failure Modes]]
-- [[../VerificationFlows/README|Verification Flows]]
+- [[../70_SessionContinuity/Sprints/current-sprint|Current Sprint]]
+- [[../70_SessionContinuity/ImplementationLog/active-implementation|Active Implementation]]
+- [[../50_RuntimeOps/Regressions/regression-tracker|Regression Tracker]]
+- [[../20_ArchitectureMemory/Architecture Contracts]]
+- [[../20_ArchitectureMemory/Editor Invariants]]
+- [[../20_ArchitectureMemory/Known Failure Modes]]
+- [[../60_DeliveryValidation/VerificationFlows/README|Verification Flows]]
 
 ## Required Recovery Commands
 ```bash
@@ -1086,8 +1095,8 @@ Every handoff must answer:
 - What is the next narrow action?
 
 ## Prompt Flow
-- Claude prompt: [[../AgentPrompts/implement-next-feature]]
-- Codex prompt: [[../AgentPrompts/review-latest-diff]]
+- Claude prompt: [[../40_PromptEngineering/AgentPrompts/implement-next-feature]]
+- Codex prompt: [[../40_PromptEngineering/AgentPrompts/review-latest-diff]]
 - ChatGPT prompt workbench: [[../40_PromptEngineering/Prompt Cockpit]]
 EOF
 
@@ -1102,12 +1111,12 @@ Goal: keep AI prompts operational, role-specific, and grounded in canonical cont
 - ChatGPT prompt architect: refine prompts when session continuity or AI role boundaries start to blur.
 
 ## Prompt Families
-- [[../AgentPrompts/continue-current-sprint]]
-- [[../AgentPrompts/implement-next-feature]]
-- [[../AgentPrompts/review-latest-diff]]
-- [[../AgentPrompts/diagnose-runtime-regression]]
-- [[../AgentPrompts/verify-editor-invariants]]
-- [[../AgentPrompts/write-session-handoff]]
+- [[../40_PromptEngineering/AgentPrompts/continue-current-sprint]]
+- [[../40_PromptEngineering/AgentPrompts/implement-next-feature]]
+- [[../40_PromptEngineering/AgentPrompts/review-latest-diff]]
+- [[../40_PromptEngineering/AgentPrompts/diagnose-runtime-regression]]
+- [[../40_PromptEngineering/AgentPrompts/verify-editor-invariants]]
+- [[../40_PromptEngineering/AgentPrompts/write-session-handoff]]
 
 ## Prompt Rules
 - Link canonical docs instead of pasting the vault.
@@ -1410,9 +1419,9 @@ restore() {
     echo "- Repo: $ROOT_DIR"
     echo "- Vault: $VAULT_DIR"
     echo "- Sprint: SPPStudioDocs/70_SessionContinuity/Sprints/current-sprint.md"
-    echo "- Active implementation: SPPStudioDocs/ImplementationLog/active-implementation.md"
-    echo "- Regressions: SPPStudioDocs/Regressions/regression-tracker.md"
-    echo "- Unresolved bugs: SPPStudioDocs/Issues/unresolved-bugs.md"
+    echo "- Active implementation: SPPStudioDocs/70_SessionContinuity/ImplementationLog/active-implementation.md"
+    echo "- Regressions: SPPStudioDocs/50_RuntimeOps/Regressions/regression-tracker.md"
+    echo "- Unresolved bugs: SPPStudioDocs/50_RuntimeOps/Issues/unresolved-bugs.md"
     echo "- Dashboard: SPPStudioDocs/00_CommandCenter/Engineering Dashboard.md"
     echo "- State JSON: script/state/current-session.json"
     echo "- Current focus: script/state/current-focus.md"
@@ -1430,12 +1439,12 @@ restore() {
     echo "- SPPStudioDocs/00_CommandCenter/Engineering Dashboard.md"
     echo "- SPPStudioDocs/00_CommandCenter/Current Operating State.md"
     echo "- SPPStudioDocs/70_SessionContinuity/Sprints/current-sprint.md"
-    echo "- SPPStudioDocs/Architecture Contracts.md"
-    echo "- SPPStudioDocs/Editor Invariants.md"
-    echo "- SPPStudioDocs/Known Failure Modes.md"
+    echo "- SPPStudioDocs/20_ArchitectureMemory/Architecture Contracts.md"
+    echo "- SPPStudioDocs/20_ArchitectureMemory/Editor Invariants.md"
+    echo "- SPPStudioDocs/20_ArchitectureMemory/Known Failure Modes.md"
     echo ""
     echo "## Recommended Prompt"
-    echo "- SPPStudioDocs/AgentPrompts/continue-current-sprint.md"
+    echo "- SPPStudioDocs/40_PromptEngineering/AgentPrompts/continue-current-sprint.md"
     echo ""
     echo "## Recommended Next Action"
     echo "- $(recommended_next_action)"
@@ -1504,7 +1513,7 @@ summary() {
   local topic="${1:-session}"
   local slug
   slug="$(slugify "$topic")"
-  local file="$VAULT_DIR/SessionSummaries/$TODAY-$slug.md"
+  local file="$VAULT_DIR/70_SessionContinuity/SessionSummaries/$TODAY-$slug.md"
 
   {
     echo "# Session: $TODAY - $topic"
@@ -1519,13 +1528,13 @@ summary() {
     echo "- "
     echo ""
     echo "## Open Issues"
-    echo "- See [[Issues/unresolved-bugs]] and [[Regressions/regression-tracker]]."
+    echo "- See [[50_RuntimeOps/Issues/unresolved-bugs]] and [[50_RuntimeOps/Regressions/regression-tracker]]."
     echo ""
     echo "## Next Session"
     echo "- Continue from [[70_SessionContinuity/Sprints/current-sprint]]."
   } >"$file"
 
-  append_line "$VAULT_DIR/70_SessionContinuity/ImplementationLog/active-implementation.md" "- $TODAY: Created session summary [[SessionSummaries/$TODAY-$slug]]."
+  append_line "$VAULT_DIR/70_SessionContinuity/ImplementationLog/active-implementation.md" "- $TODAY: Created session summary [[70_SessionContinuity/SessionSummaries/$TODAY-$slug]]."
   echo "Created $file"
 }
 
@@ -1538,7 +1547,7 @@ regression() {
   count="$(grep -c "^| REG-$TODAY" "$VAULT_DIR/50_RuntimeOps/Regressions/regression-tracker.md" || true)"
   id="REG-$TODAY-$(printf "%03d" "$((count + 1))")"
   append_line "$VAULT_DIR/50_RuntimeOps/Regressions/regression-tracker.md" "| $id | $area | $severity | Open | $TODAY | Unassigned | $symptom |"
-  append_line "$VAULT_DIR/Bugs/known-regressions.md" "- [ ] $id: $symptom"
+  append_line "$VAULT_DIR/50_RuntimeOps/Bugs/known-regressions.md" "- [ ] $id: $symptom"
   echo "Logged $id"
 }
 
@@ -1546,7 +1555,7 @@ issue() {
   require_vault
   local priority="${1:-Medium}"
   local symptom="${2:-No issue provided}"
-  append_line "$VAULT_DIR/Issues/unresolved-bugs.md" "- [ ] $priority: $symptom"
+  append_line "$VAULT_DIR/50_RuntimeOps/Issues/unresolved-bugs.md" "- [ ] $priority: $symptom"
   echo "Logged issue"
 }
 
@@ -1566,7 +1575,7 @@ artifact() {
   local notes="${3:-No notes provided}"
   local slug file dir
   slug="$(slugify "$topic")"
-  dir="$VAULT_DIR/VerificationArtifacts/$kind"
+  dir="$VAULT_DIR/60_DeliveryValidation/VerificationArtifacts/$kind"
   mkdir -p "$dir"
   file="$dir/$TODAY-$slug.md"
   {
@@ -1578,8 +1587,8 @@ artifact() {
     echo ""
     echo "## Context"
     echo "- Dashboard: [[Engineering Dashboard]]"
-    echo "- Architecture: [[Architecture Contracts]]"
-    echo "- Invariants: [[Editor Invariants]]"
+    echo "- Architecture: [[20_ArchitectureMemory/Architecture Contracts]]"
+    echo "- Invariants: [[20_ArchitectureMemory/Editor Invariants]]"
   } >"$file"
   echo "Created $file"
 }
@@ -1614,7 +1623,7 @@ $entry" "$log_file"
 handoff() {
   require_vault
   local next_task="${1:-Continue from current sprint}"
-  local file="$VAULT_DIR/SessionSummaries/$TODAY-handoff.md"
+  local file="$VAULT_DIR/70_SessionContinuity/SessionSummaries/$TODAY-handoff.md"
   {
     echo "# Session Handoff: $TODAY"
     echo ""
@@ -1622,7 +1631,7 @@ handoff() {
     echo "- Dashboard: [[Engineering Dashboard]]"
     echo "- Sprint: [[Current Sprint]]"
     echo "- Regressions: [[Regression Tracker]]"
-    echo "- Architecture: [[Architecture Contracts]]"
+    echo "- Architecture: [[20_ArchitectureMemory/Architecture Contracts]]"
     echo ""
     echo "## Next Task"
     echo "- $next_task"
@@ -1632,7 +1641,7 @@ handoff() {
     echo "- High: build console rendering, runtime/editor routing, completion ownership."
     echo ""
     echo "## Prompt"
-    echo "- [[AgentPrompts/continue-current-sprint]]"
+    echo "- [[40_PromptEngineering/AgentPrompts/continue-current-sprint]]"
     echo ""
     echo "## Warnings"
     unresolved_regressions
@@ -1640,7 +1649,7 @@ handoff() {
     echo "## Verification"
     latest_build
   } >"$file"
-  append_line "$VAULT_DIR/70_SessionContinuity/ImplementationLog/active-implementation.md" "- $TODAY: Wrote handoff [[SessionSummaries/$TODAY-handoff]]."
+  append_line "$VAULT_DIR/70_SessionContinuity/ImplementationLog/active-implementation.md" "- $TODAY: Wrote handoff [[70_SessionContinuity/SessionSummaries/$TODAY-handoff]]."
   echo "Created $file"
 }
 
@@ -1649,7 +1658,7 @@ adr() {
   local title="${1:-Untitled decision}"
   local decision="${2:-Decision not specified}"
   local reason="${3:-Reason not specified}"
-  local adr_file="$VAULT_DIR/Architecture/architecture-decisions.md"
+  local adr_file="$VAULT_DIR/20_ArchitectureMemory/Architecture/architecture-decisions.md"
   local count
   count="$(grep -c "^## AD-" "$adr_file" || true)"
   local id

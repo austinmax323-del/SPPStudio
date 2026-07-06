@@ -480,13 +480,29 @@ public final class ProjectService: ObservableObject {
 
         #import <UIKit/UIKit.h>
 
-        %hook SomeClass
+        // Hook a method that reliably runs on launch (every UIKit app loads at least
+        // one view controller). The marker below proves a %hook body actually fired —
+        // not merely that the dylib loaded. SPPStudio's injection verification watches
+        // the simulator syslog for it. Replace with your own target class/method.
+        %hook UIViewController
 
-        - (void)someMethod {
+        - (void)viewDidLoad {
             %orig;
+            // Emit once: viewDidLoad fires for many controllers.
+            static dispatch_once_t onceToken;
+            dispatch_once(&onceToken, ^{
+                NSLog(@"\(InjectionVerificationService.hookMarker)");
+            });
         }
 
         %end
+
+        // Load marker — emitted when the dylib's constructor runs. SPPStudio's
+        // injection verification watches the simulator syslog for this exact string
+        // to confirm the dylib actually loaded. Safe to keep or remove.
+        %ctor {
+            NSLog(@"\(InjectionVerificationService.loadMarker)");
+        }
         """
     }
 }

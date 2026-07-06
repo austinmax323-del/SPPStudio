@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 import SPPCore
 
 // MARK: - Editor Tab Model
@@ -52,11 +53,19 @@ struct EditorAreaView: View {
         .onReceive(appEnv.eventBus.publisher(for: FileSelectedEvent.self)) { event in
             openOrFocusTab(fileID: event.fileID)
         }
+        .onReceive(appEnv.eventBus.publisher(for: NavigateToLineEvent.self)) { event in
+            navigateToLine(fileID: event.fileID, line: event.line, column: event.column)
+        }
+        .onAppear {
+            openFirstProjectFileIfNeeded()
+        }
         .onChange(of: appEnv.currentProject?.id) { _, _ in
             resetEditorTabs()
+            openFirstProjectFileIfNeeded()
         }
         .onChange(of: projectFileSignature) { _, _ in
             pruneInvalidTabs()
+            openFirstProjectFileIfNeeded()
         }
         .background {
             ZStack {
@@ -161,6 +170,7 @@ struct EditorAreaView: View {
                     contentType: tab.contentType,
                     tabID: tab.id,
                     fileID: tab.fileID,
+                    diagnosticsStore: appEnv.fileDiagnosticsStore,
                     isActive: tab.id == activeTabID,
                     selection: Binding(
                         get: { tabs.first(where: { $0.id == tab.id })?.selectedRange ?? NSRange(location: 0, length: 0) },
@@ -173,6 +183,7 @@ struct EditorAreaView: View {
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -344,6 +355,52 @@ struct EditorAreaView: View {
         return view.subviews.lazy.compactMap { visibleCodeTextView(in: $0) }.first
     }
 
+    // MARK: - Navigation (click-to-jump)
+
+    /// Opens/focuses a file and moves the caret to a 1-based line/column,
+    /// scrolling it into view. Selection flows through the tab binding (so the
+    /// pooled editor picks it up); scroll + focus are applied to the now-visible
+    /// text view once SwiftUI has switched tabs.
+    private func navigateToLine(fileID: UUID, line: Int, column: Int?) {
+        openOrFocusTab(fileID: fileID)
+        guard let idx = tabs.firstIndex(where: { $0.fileID == fileID }) else { return }
+        let range = caretRange(line: line, column: column, in: tabs[idx].contents)
+        tabs[idx].selectedRange = range
+        activeTabID = tabs[idx].id
+
+        DispatchQueue.main.async {
+            guard let window = NSApp.keyWindow ?? NSApp.mainWindow,
+                  let tv = visibleCodeTextView(in: window.contentView) else { return }
+            let length = (tv.string as NSString).length
+            let caret = NSRange(location: min(range.location, length), length: 0)
+            tv.setSelectedRange(caret)
+            tv.scrollRangeToVisible(caret)
+            window.makeFirstResponder(tv)
+        }
+    }
+
+    /// Zero-length caret range at the start of a 1-based line, offset by an
+    /// optional 1-based column, clamped to the line's content.
+    private func caretRange(line: Int, column: Int?, in text: String) -> NSRange {
+        let ns = text as NSString
+        let len = ns.length
+        var index = 0
+        var currentLine = 1
+        while currentLine < line, index < len {
+            let nl = ns.range(of: "\n", options: [], range: NSRange(location: index, length: len - index))
+            if nl.location == NSNotFound { index = len; break }
+            index = nl.location + 1
+            currentLine += 1
+        }
+        if let column, column > 1, index <= len {
+            var lineStart = 0, lineEnd = 0, contentsEnd = 0
+            ns.getLineStart(&lineStart, end: &lineEnd, contentsEnd: &contentsEnd,
+                            for: NSRange(location: min(index, len), length: 0))
+            index = min(lineStart + (column - 1), contentsEnd)
+        }
+        return NSRange(location: min(index, len), length: 0)
+    }
+
     // MARK: - Tab Management
 
     private func openOrFocusTab(fileID: UUID) {
@@ -375,6 +432,17 @@ struct EditorAreaView: View {
         )
         tabs.append(tab)
         activeTabID = tab.id
+    }
+
+    private func openFirstProjectFileIfNeeded() {
+        guard activeTabID == nil,
+              let project = appEnv.currentProject,
+              let firstFile = project.files
+                .flatMap({ $0.allFiles() })
+                .first(where: { !$0.isDirectory })
+        else { return }
+
+        openOrFocusTab(fileID: firstFile.id)
     }
 
     private func closeTab(_ tab: EditorTab) {
@@ -545,6 +613,209 @@ final class CodeTextView: NSTextView {
     var bracketMatchRanges: (NSRange, NSRange)? {
         didSet { needsDisplay = true }
     }
+    weak var renderOverlay: CodeTextRenderOverlayView?
+    private(set) var drawCount = 0
+    private(set) var lastDirtyRect = NSRect.zero
+
+    /// 1-based line → combined diagnostic message, used for hover tooltips.
+    /// Set by the editor coordinator from `FileDiagnosticsStore`.
+    var diagnosticMessagesByLine: [Int: String] = [:]
+    private var diagnosticTrackingArea: NSTrackingArea?
+
+    override var isOpaque: Bool { true }
+
+    override var wantsLayer: Bool {
+        get { false }
+        set { }
+    }
+
+    override var wantsUpdateLayer: Bool { false }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        needsDisplay = true
+        layer?.needsDisplay()
+    }
+
+    // MARK: - Hover tooltips (diagnostics)
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let diagnosticTrackingArea { removeTrackingArea(diagnosticTrackingArea) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        diagnosticTrackingArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        guard !diagnosticMessagesByLine.isEmpty else {
+            if toolTip != nil { toolTip = nil }
+            return
+        }
+        guard let layoutManager, let textContainer else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        let containerPoint = NSPoint(
+            x: point.x - textContainerOrigin.x,
+            y: point.y - textContainerOrigin.y
+        )
+        // Ignore hovers below all text so we don't show a stale last-line tooltip.
+        let usedRect = layoutManager.usedRect(for: textContainer)
+        guard containerPoint.y <= usedRect.maxY else {
+            if toolTip != nil { toolTip = nil }
+            return
+        }
+        let glyphIndex = layoutManager.glyphIndex(for: containerPoint, in: textContainer)
+        let charIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
+        let line = lineNumber(forCharacterIndex: charIndex)
+        let message = diagnosticMessagesByLine[line]
+        if toolTip != message { toolTip = message }
+    }
+
+    private func lineNumber(forCharacterIndex index: Int) -> Int {
+        let ns = string as NSString
+        let clamped = min(max(0, index), ns.length)
+        var line = 1
+        var i = 0
+        while i < clamped {
+            let nl = ns.range(of: "\n", options: [], range: NSRange(location: i, length: clamped - i))
+            if nl.location == NSNotFound { break }
+            line += 1
+            i = nl.location + 1
+        }
+        return line
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        drawCount += 1
+        lastDirtyRect = dirtyRect
+        backgroundColor.setFill()
+        dirtyRect.fill()
+
+        guard let layoutManager, let textContainer else { return }
+        layoutManager.ensureLayout(for: textContainer)
+
+        let origin = textContainerOrigin
+        let containerDirtyRect = dirtyRect.offsetBy(dx: -origin.x, dy: -origin.y)
+        let glyphRange = layoutManager.glyphRange(forBoundingRect: containerDirtyRect, in: textContainer)
+        guard glyphRange.location != NSNotFound, glyphRange.length > 0 else { return }
+
+        layoutManager.drawBackground(forGlyphRange: glyphRange, at: origin)
+        layoutManager.drawGlyphs(forGlyphRange: glyphRange, at: origin)
+    }
+}
+
+final class CodeTextRenderOverlayView: NSView {
+    weak var textView: CodeTextView?
+    weak var scrollView: NSScrollView?
+
+    init(textView: CodeTextView, scrollView: NSScrollView) {
+        self.textView = textView
+        self.scrollView = scrollView
+        super.init(frame: .zero)
+        wantsLayer = false
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override var isFlipped: Bool { true }
+
+    override var wantsLayer: Bool {
+        get { false }
+        set { }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard
+            let textView,
+            let scrollView,
+            let storage = textView.textStorage,
+            let layoutManager = textView.layoutManager,
+            let textContainer = textView.textContainer
+        else { return }
+
+        layoutManager.ensureLayout(for: textContainer)
+        let origin = textView.textContainerOrigin
+        let clipOrigin = scrollView.contentView.bounds.origin
+        let containerDirtyRect = dirtyRect
+            .offsetBy(dx: clipOrigin.x - origin.x, dy: clipOrigin.y - origin.y)
+        let glyphRange = layoutManager.glyphRange(forBoundingRect: containerDirtyRect, in: textContainer)
+        guard glyphRange.location != NSNotFound, glyphRange.length > 0 else { return }
+
+        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { lineRect, usedRect, _, lineGlyphRange, _ in
+            var charRange = layoutManager.characterRange(forGlyphRange: lineGlyphRange, actualGlyphRange: nil)
+            guard charRange.length > 0, NSMaxRange(charRange) <= storage.length else { return }
+
+            let source = storage.string as NSString
+            while charRange.length > 0 {
+                let lastIndex = charRange.location + charRange.length - 1
+                let last = source.character(at: lastIndex)
+                if last == 10 || last == 13 {
+                    charRange.length -= 1
+                } else {
+                    break
+                }
+            }
+            guard charRange.length > 0 else { return }
+
+            let renderedLine = NSMutableAttributedString(attributedString: storage.attributedSubstring(from: charRange))
+            renderedLine.removeAttribute(.backgroundColor, range: NSRange(location: 0, length: renderedLine.length))
+            renderedLine.draw(at: NSPoint(
+                x: origin.x + usedRect.minX - clipOrigin.x,
+                y: origin.y + lineRect.minY - clipOrigin.y
+            ))
+        }
+    }
+}
+
+final class CodeClipView: NSClipView {
+    override var wantsLayer: Bool {
+        get { false }
+        set { }
+    }
+}
+
+final class CodeScrollView: NSScrollView {
+    override var wantsLayer: Bool {
+        get { false }
+        set { }
+    }
+}
+
+final class CodeEditorContainerView: NSView {
+    let scrollView: CodeScrollView
+    let renderOverlay: CodeTextRenderOverlayView
+
+    init(scrollView: CodeScrollView, renderOverlay: CodeTextRenderOverlayView) {
+        self.scrollView = scrollView
+        self.renderOverlay = renderOverlay
+        super.init(frame: .zero)
+        wantsLayer = false
+        addSubview(scrollView)
+        addSubview(renderOverlay, positioned: .above, relativeTo: scrollView)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override var wantsLayer: Bool {
+        get { false }
+        set { }
+    }
+
+    override func layout() {
+        super.layout()
+        scrollView.frame = bounds
+        renderOverlay.frame = bounds
+        scrollView.tile()
+        renderOverlay.needsDisplay = true
+    }
 }
 
 // MARK: - Code Editor (NSTextView + ruler + syntax highlighting)
@@ -555,11 +826,12 @@ struct CodeEditorView: NSViewRepresentable {
     let contentType: SPPFile.FileContentType
     let tabID: UUID
     let fileID: UUID
+    let diagnosticsStore: FileDiagnosticsStore
     let isActive: Bool
     @Binding var selection: NSRange
     @Binding var scrollOffset: NSPoint
 
-    func makeNSView(context: Context) -> NSScrollView {
+    func makeNSView(context: Context) -> CodeEditorContainerView {
         let tv = CodeTextView(
             frame: NSRect(x: 0, y: 0, width: 800, height: 600)
         )
@@ -599,14 +871,14 @@ struct CodeEditorView: NSViewRepresentable {
             .foregroundColor: NSColor(white: 0.97, alpha: 1)
         ]
 
-        // Keep the text container tied to the visible editor width. The previous
-        // unbounded horizontal container intermittently laid glyphs outside the
-        // visible rect while accessibility still exposed the text.
+        // Keep the text container tied to the visible editor width. The text view
+        // stays vertically resizable; adding .height here fights the layout manager
+        // and can leave glyphs laid out but not redrawn.
         tv.isHorizontallyResizable = false
         tv.isVerticallyResizable   = true
         tv.minSize                 = .zero
         tv.maxSize                 = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        tv.autoresizingMask        = [.width, .height]
+        tv.autoresizingMask        = [.width]
 
         // Tab width: 4 spaces
         let tabFont  = NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular)
@@ -617,9 +889,13 @@ struct CodeEditorView: NSViewRepresentable {
         tv.defaultParagraphStyle    = tabStyle
         tv.typingAttributes[.paragraphStyle] = tabStyle
 
-        // Scroll view
-        let scrollView = NSScrollView()
+        // Plain scroll view. SwiftUI owns the outer frame; this subtree renders
+        // through AppKit's normal draw pipeline.
+        let scrollView = CodeScrollView()
+        scrollView.contentView = CodeClipView()
         scrollView.documentView               = tv
+        let renderOverlay = CodeTextRenderOverlayView(textView: tv, scrollView: scrollView)
+        tv.renderOverlay = renderOverlay
         scrollView.hasVerticalScroller        = true
         scrollView.hasHorizontalScroller      = false
         scrollView.autohidesScrollers         = true
@@ -649,14 +925,21 @@ struct CodeEditorView: NSViewRepresentable {
             textView: tv,
             scrollView: scrollView
         )
+        context.coordinator.observeDiagnostics(store: diagnosticsStore, fileID: fileID, textView: tv)
 
-        return scrollView
+        return CodeEditorContainerView(scrollView: scrollView, renderOverlay: renderOverlay)
     }
 
-    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+    func updateNSView(_ container: CodeEditorContainerView, context: Context) {
         context.coordinator.parent = self
+        let scrollView = container.scrollView
+        container.isHidden = !isActive
         scrollView.isHidden = !isActive
+        container.needsLayout = true
         guard isActive, let tv = scrollView.documentView as? CodeTextView else { return }
+        if Self.syncTextLayout(tv, in: scrollView) {
+            DispatchQueue.main.async { [weak tv] in tv?.display() }
+        }
         RuntimeInvariantInspector.updateActive(tabID: tabID, fileID: fileID, selection: tv.selectedRange())
 
         if context.coordinator.lastRenderedText != text {
@@ -671,21 +954,22 @@ struct CodeEditorView: NSViewRepresentable {
             tv.textColor = NSColor(white: 0.82, alpha: 1)
             tv.typingAttributes = Self.editorTypingAttributes()
             tv.setSelectedRange(clamped(selection, in: text))
-            tv.layoutManager?.ensureLayout(for: tv.textContainer!)
+            Self.syncTextLayout(tv, in: scrollView, forceDisplay: true)
             tv.undoManager?.removeAllActions()
             context.coordinator.lastRenderedText = text
             context.coordinator.isApplyingExternalUpdate = false
             context.coordinator.updateEditorChrome(tv)
+            context.coordinator.reapplyDiagnostics(tv)
             context.coordinator.ruler?.needsDisplay = true
             tv.needsDisplay = true
             // Defer a second layout+display pass to after SwiftUI's layout phase.
             // On first open the scroll view frame may still be zero; the async
             // dispatch ensures the text container has its final width before we
             // force the glyph layout and redraw.
-            DispatchQueue.main.async { [weak tv] in
-                guard let tv else { return }
-                tv.layoutManager?.ensureLayout(for: tv.textContainer!)
-                tv.needsDisplay = true
+            DispatchQueue.main.async { [weak scrollView, weak tv] in
+                guard let scrollView, let tv else { return }
+                Self.syncTextLayout(tv, in: scrollView, forceDisplay: true)
+                tv.display()
             }
         }
 
@@ -696,12 +980,52 @@ struct CodeEditorView: NSViewRepresentable {
         if scrollView.contentView.bounds.origin != scrollOffset {
             DispatchQueue.main.async {
                 context.coordinator.isRestoringScroll = true
-                scrollView.contentView.layoutSubtreeIfNeeded()
                 scrollView.contentView.scroll(to: scrollOffset)
                 scrollView.reflectScrolledClipView(scrollView.contentView)
                 context.coordinator.isRestoringScroll = false
             }
         }
+    }
+
+    @discardableResult
+    private static func syncTextLayout(_ tv: CodeTextView, in scrollView: NSScrollView, forceDisplay: Bool = false) -> Bool {
+        let clipWidth = scrollView.contentView.bounds.width
+        guard clipWidth.isFinite, clipWidth > 0 else { return false }
+
+        var didChangeLayout = false
+        let textViewWidth = max(1, clipWidth)
+        if abs(tv.frame.width - textViewWidth) > 0.5 {
+            tv.setFrameSize(NSSize(
+                width: textViewWidth,
+                height: max(tv.frame.height, scrollView.contentView.bounds.height)
+            ))
+            didChangeLayout = true
+        }
+
+        if let container = tv.textContainer {
+            container.widthTracksTextView = true
+            container.heightTracksTextView = false
+            if container.containerSize.height != CGFloat.greatestFiniteMagnitude {
+                container.containerSize = NSSize(
+                    width: container.containerSize.width,
+                    height: CGFloat.greatestFiniteMagnitude
+                )
+                didChangeLayout = true
+            }
+        }
+
+        guard didChangeLayout || forceDisplay else { return false }
+
+        let fullRange = NSRange(location: 0, length: (tv.string as NSString).length)
+        tv.layoutManager?.invalidateLayout(forCharacterRange: fullRange, actualCharacterRange: nil)
+        tv.layoutManager?.invalidateDisplay(forCharacterRange: fullRange)
+        if let textContainer = tv.textContainer {
+            tv.layoutManager?.ensureLayout(for: textContainer)
+        }
+        tv.needsDisplay = true
+        tv.renderOverlay?.frame = tv.frame
+        tv.renderOverlay?.needsDisplay = true
+        return true
     }
 
     private func clamped(_ range: NSRange, in source: String) -> NSRange {
@@ -730,8 +1054,9 @@ struct CodeEditorView: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
-    static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
+    static func dismantleNSView(_ nsView: CodeEditorContainerView, coordinator: Coordinator) {
         NotificationCenter.default.removeObserver(coordinator)
+        coordinator.diagnosticsCancellable?.cancel()
         RuntimeInvariantInspector.unregister(tabID: coordinator.parent.tabID)
     }
 
@@ -745,6 +1070,12 @@ struct CodeEditorView: NSViewRepresentable {
         var isApplyingExternalUpdate = false
         var isRestoringScroll = false
 
+        // Diagnostics (M6). Underline temporary attributes only — a different
+        // attribute key from symbol highlighting (.backgroundColor) so the two
+        // features never remove each other's temporary attributes.
+        var diagnosticsCancellable: AnyCancellable?
+        private var appliedDiagnosticRanges: [NSRange] = []
+
         init(_ parent: CodeEditorView) { self.parent = parent }
 
         func textDidChange(_ notification: Notification) {
@@ -756,9 +1087,14 @@ struct CodeEditorView: NSViewRepresentable {
                 SyntaxHighlighter.apply(to: storage, contentType: parent.contentType)
                 tv.setSelectedRange(selectedRange)
             }
+            (tv as? CodeTextView)?.renderOverlay?.needsDisplay = true
             parent.selection = tv.selectedRange()
             RuntimeInvariantInspector.recordSelection(tabID: parent.tabID, fileID: parent.fileID, selection: parent.selection)
             updateEditorChrome(tv)
+            // The build's diagnostics are stale the moment the file is edited;
+            // drop them for this file. The store change flows back through the
+            // per-file publisher and clears the rendered underlines + markers.
+            parent.diagnosticsStore.clear(fileID: parent.fileID)
             ruler?.needsDisplay = true
         }
 
@@ -767,12 +1103,38 @@ struct CodeEditorView: NSViewRepresentable {
             parent.selection = tv.selectedRange()
             RuntimeInvariantInspector.recordSelection(tabID: parent.tabID, fileID: parent.fileID, selection: parent.selection)
             updateEditorChrome(tv)
+            (tv as? CodeTextView)?.renderOverlay?.needsDisplay = true
+        }
+
+        // MARK: Completion (M6)
+
+        /// NSTextView-native completion (triggered by ⌥⎋ / F5). Replaces the
+        /// system's spell-check suggestions with a language- and document-aware
+        /// list; falls back to the default when nothing matches.
+        func textView(
+            _ textView: NSTextView,
+            completions words: [String],
+            forPartialWordRange charRange: NSRange,
+            indexOfSelectedItem index: UnsafeMutablePointer<Int>?
+        ) -> [String] {
+            let ns = textView.string as NSString
+            guard charRange.length > 0, NSMaxRange(charRange) <= ns.length else { return words }
+            let partial = ns.substring(with: charRange)
+            let suggestions = CodeCompletionProvider.completions(
+                forPartialWord: partial,
+                in: textView.string,
+                contentType: parent.contentType
+            )
+            index?.pointee = suggestions.isEmpty ? -1 : 0
+            return suggestions.isEmpty ? words : suggestions
         }
 
         @objc func scrollViewDidScroll(_ notification: Notification) {
             guard !isRestoringScroll else { return }
             guard let clipView = notification.object as? NSClipView else { return }
             parent.scrollOffset = clipView.bounds.origin
+            (clipView.documentView as? CodeTextView)?.renderOverlay?.needsDisplay = true
+            ruler?.needsDisplay = true
         }
 
         func updateEditorChrome(_ tv: NSTextView) {
@@ -877,6 +1239,121 @@ struct CodeEditorView: NSViewRepresentable {
                 lm.addTemporaryAttribute(.backgroundColor, value: color, forCharacterRange: r)
                 symbolHighlightedRanges.append(r)
             }
+        }
+
+        // MARK: Diagnostics (M6)
+
+        /// Subscribes this editor to the diagnostics for its own file. `@Published`
+        /// delivers the current value immediately, so any diagnostics already
+        /// present when the editor is created are applied at once (a no-op until
+        /// the text has been loaded — `reapplyDiagnostics()` covers that case).
+        @MainActor
+        func observeDiagnostics(store: FileDiagnosticsStore, fileID: UUID, textView tv: CodeTextView) {
+            diagnosticsCancellable = store.publisher(for: fileID)
+                .sink { [weak self, weak tv] diagnostics in
+                    // The store is @MainActor and only ever mutated on the main
+                    // actor, so its emissions arrive on the main actor too.
+                    guard let tv else { return }
+                    MainActor.assumeIsolated { self?.applyDiagnostics(diagnostics, to: tv) }
+                }
+        }
+
+        /// Re-applies the store's current diagnostics for this file. Called after
+        /// an external text (re)load, when the layout finally has the characters
+        /// the diagnostic ranges refer to.
+        @MainActor
+        func reapplyDiagnostics(_ tv: CodeTextView) {
+            applyDiagnostics(parent.diagnosticsStore.diagnostics(for: parent.fileID), to: tv)
+        }
+
+        /// Renders diagnostics as *temporary* layout attributes (underline) plus
+        /// gutter markers. Never mutates text storage — diagnostics are advisory
+        /// rendering state owned by file identity, not the editor.
+        @MainActor
+        private func applyDiagnostics(_ diagnostics: [Diagnostic], to tv: CodeTextView) {
+            guard let lm = tv.layoutManager else { return }
+            let ns = tv.string as NSString
+
+            for range in appliedDiagnosticRanges where NSMaxRange(range) <= ns.length {
+                lm.removeTemporaryAttribute(.underlineStyle, forCharacterRange: range)
+                lm.removeTemporaryAttribute(.underlineColor, forCharacterRange: range)
+            }
+            appliedDiagnosticRanges.removeAll(keepingCapacity: true)
+
+            var markerLines: [Int: Diagnostic.Severity] = [:]
+            var messagesByLine: [Int: String] = [:]
+            for diag in diagnostics {
+                markerLines[diag.line] = max(markerLines[diag.line] ?? diag.severity, diag.severity)
+                let label = Self.severityLabel(diag.severity)
+                if let existing = messagesByLine[diag.line] {
+                    messagesByLine[diag.line] = existing + "\n\(label): \(diag.message)"
+                } else {
+                    messagesByLine[diag.line] = "\(label): \(diag.message)"
+                }
+
+                guard let range = diagnosticUnderlineRange(for: diag, in: ns) else { continue }
+                let style: NSUnderlineStyle = diag.severity == .error ? .thick : .single
+                lm.addTemporaryAttributes(
+                    [
+                        .underlineStyle: style.rawValue,
+                        .underlineColor: IDETheme.EditorColors.underline(for: diag.severity)
+                    ],
+                    forCharacterRange: range
+                )
+                appliedDiagnosticRanges.append(range)
+            }
+
+            ruler?.diagnosticLines = markerLines
+            tv.diagnosticMessagesByLine = messagesByLine
+            tv.renderOverlay?.needsDisplay = true
+            tv.needsDisplay = true
+        }
+
+        private static func severityLabel(_ severity: Diagnostic.Severity) -> String {
+            switch severity {
+            case .error:   return "Error"
+            case .warning: return "Warning"
+            case .note:    return "Note"
+            }
+        }
+
+        /// Character range to underline for a diagnostic: from the first
+        /// non-indentation character (or the reported column) to the end of the
+        /// line's content. Returns nil for out-of-range or empty lines.
+        private func diagnosticUnderlineRange(for diag: Diagnostic, in ns: NSString) -> NSRange? {
+            guard let lineRange = lineContentRange(diag.line, in: ns), lineRange.length > 0 else { return nil }
+            let end = NSMaxRange(lineRange)
+            var start = lineRange.location
+            while start < end {
+                let c = ns.character(at: start)
+                if c == 32 || c == 9 { start += 1 } else { break }
+            }
+            if let col = diag.column {
+                let colStart = lineRange.location + (col - 1)
+                if colStart >= lineRange.location, colStart < end { start = colStart }
+            }
+            let length = end - start
+            return length > 0 ? NSRange(location: start, length: length) : nil
+        }
+
+        /// Character range of a 1-based line's content (excluding the trailing
+        /// newline). Nil if the line is beyond the end of the text.
+        private func lineContentRange(_ line: Int, in ns: NSString) -> NSRange? {
+            guard line >= 1, ns.length > 0 else { return nil }
+            let len = ns.length
+            var currentLine = 1
+            var index = 0
+            while currentLine < line, index < len {
+                let nl = ns.range(of: "\n", options: [], range: NSRange(location: index, length: len - index))
+                guard nl.location != NSNotFound else { return nil }
+                index = nl.location + 1
+                currentLine += 1
+            }
+            guard currentLine == line else { return nil }
+            var lineStart = 0, lineEnd = 0, contentsEnd = 0
+            ns.getLineStart(&lineStart, end: &lineEnd, contentsEnd: &contentsEnd,
+                            for: NSRange(location: index, length: 0))
+            return NSRange(location: lineStart, length: max(0, contentsEnd - lineStart))
         }
     }
 }

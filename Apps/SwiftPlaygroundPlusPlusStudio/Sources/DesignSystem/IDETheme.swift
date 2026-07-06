@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import SPPCore
 
 // MARK: - IDE Theme
 
@@ -43,6 +44,29 @@ enum IDETheme {
         static let objcBlue            = Color(red: 0.28, green: 0.66, blue: 0.92)
         static let logosXMPurple       = Color(red: 0.58, green: 0.42, blue: 0.88)
         static let makefileGreen       = Color(red: 0.58, green: 0.82, blue: 0.38)
+
+        // Diagnostics (SwiftUI surfaces — Problems list, badges)
+        static let diagnosticError     = consoleError
+        static let diagnosticWarning   = consoleWarning
+        static let diagnosticNote      = consoleInfo
+    }
+
+    // MARK: AppKit Editor Colors
+
+    /// `NSColor` tokens for the AppKit editor surface (diagnostic underlines and
+    /// gutter markers). Kept alongside `Colors` so the editor never hardcodes hex.
+    enum EditorColors {
+        static let diagnosticError   = NSColor(red: 1.00, green: 0.36, blue: 0.36, alpha: 1)
+        static let diagnosticWarning = NSColor(red: 1.00, green: 0.74, blue: 0.24, alpha: 1)
+        static let diagnosticNote    = NSColor(red: 0.44, green: 0.76, blue: 1.00, alpha: 1)
+
+        static func underline(for severity: Diagnostic.Severity) -> NSColor {
+            switch severity {
+            case .error:   return diagnosticError
+            case .warning: return diagnosticWarning
+            case .note:    return diagnosticNote
+            }
+        }
     }
 
     // MARK: Typography

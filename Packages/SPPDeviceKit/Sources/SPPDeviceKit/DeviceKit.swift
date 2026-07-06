@@ -103,6 +103,9 @@ private func runProcess(
         let process = Process()
         process.executableURL = executableURL
         process.arguments = arguments
+        // Point xcrun at a full Xcode so `simctl` resolves even when
+        // `xcode-select` targets Command Line Tools (which has no simctl).
+        process.environment = SimulatorToolchain.processEnvironment()
 
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
@@ -134,6 +137,65 @@ private func runProcess(
 
 private let xcrunURL = URL(fileURLWithPath: "/usr/bin/xcrun")
 
+// MARK: - SimulatorToolchain
+
+/// Locates a full-Xcode developer directory for `simctl` invocations.
+///
+/// `simctl` ships **only** inside `Xcode.app` — the Command Line Tools have no
+/// `simctl`. When `xcode-select` points at the Command Line Tools (the common
+/// default), a bare `xcrun simctl` fails with *"unable to find utility simctl"*.
+/// This resolver finds a real Xcode and hands back a child environment with
+/// `DEVELOPER_DIR` set, so every simctl call works regardless of the global
+/// `xcode-select` state.
+///
+/// It resolves once and caches the result (Xcode does not move mid-session).
+public enum SimulatorToolchain {
+
+    /// A full-Xcode developer dir that contains `simctl`, or `nil` when only the
+    /// Command Line Tools are installed.
+    public static func developerDir() -> String? { cached.dir }
+
+    /// Child-process environment for `xcrun`/`simctl`: the current environment
+    /// with `DEVELOPER_DIR` overridden to a resolved full Xcode when one exists.
+    public static func processEnvironment() -> [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        if let dir = developerDir() {
+            env["DEVELOPER_DIR"] = dir
+        }
+        return env
+    }
+
+    /// Whether a simctl-capable toolchain was found.
+    public static var isAvailable: Bool { developerDir() != nil }
+
+    // MARK: - Resolution
+
+    private static let cached: (dir: String?, _: Void) = (resolveDeveloperDir(), ())
+
+    private static func resolveDeveloperDir() -> String? {
+        let fm = FileManager.default
+        func hasSimctl(_ dir: String) -> Bool {
+            fm.isExecutableFile(atPath: dir + "/usr/bin/simctl")
+        }
+
+        // 1. An explicit DEVELOPER_DIR override, if it actually has simctl.
+        if let env = ProcessInfo.processInfo.environment["DEVELOPER_DIR"], hasSimctl(env) {
+            return env
+        }
+        // 2. The conventional Xcode.app location.
+        let conventional = "/Applications/Xcode.app/Contents/Developer"
+        if hasSimctl(conventional) { return conventional }
+        // 3. Any other /Applications/Xcode*.app (beta installs, versioned copies).
+        if let apps = try? fm.contentsOfDirectory(atPath: "/Applications") {
+            for app in apps.sorted() where app.hasPrefix("Xcode") && app.hasSuffix(".app") {
+                let dir = "/Applications/\(app)/Contents/Developer"
+                if hasSimctl(dir) { return dir }
+            }
+        }
+        return nil
+    }
+}
+
 // MARK: - SimulatorDeviceProvider
 
 public actor SimulatorDeviceProvider {
@@ -145,36 +207,45 @@ public actor SimulatorDeviceProvider {
             executableURL: xcrunURL,
             arguments: ["simctl", "list", "devices", "--json"]
         )
+        return Self.parseDevices(from: stdoutData)
+    }
 
-        guard let json = try? JSONSerialization.jsonObject(with: stdoutData) as? [String: Any],
+    /// Parses `simctl list devices --json` output into `SPPDevice`s.
+    ///
+    /// Pure and side-effect free so it can be unit-tested against real simctl
+    /// JSON. A device only needs a `udid` and `name`; it is skipped only when
+    /// *explicitly* marked unavailable (`isAvailable == false`, or the legacy
+    /// `availability == "(unavailable)"` string). Requiring either field — as an
+    /// earlier version did with `availability` — silently dropped every device
+    /// on modern Xcode, which no longer emits that key.
+    static func parseDevices(from data: Data) -> [SPPDevice] {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let devicesMap = json["devices"] as? [String: [[String: Any]]] else {
             return []
         }
 
         var results: [SPPDevice] = []
-
         for (runtimeKey, deviceList) in devicesMap {
-            // Extract the OS version from the runtime identifier, e.g.
-            // "com.apple.CoreSimulator.SimRuntime.iOS-17-0" → "iOS 17.0"
             let systemVersion = parseSystemVersion(from: runtimeKey)
 
             for deviceDict in deviceList {
                 guard
                     let udid = deviceDict["udid"] as? String,
-                    let name = deviceDict["name"] as? String,
-                    let availability = deviceDict["availability"] as? String,
-                    availability != "(unavailable)"
+                    let name = deviceDict["name"] as? String
                 else { continue }
 
-                // Also skip explicitly unavailable devices via isAvailable
                 if let isAvailable = deviceDict["isAvailable"] as? Bool, !isAvailable {
+                    continue
+                }
+                if let availability = deviceDict["availability"] as? String,
+                   availability == "(unavailable)" {
                     continue
                 }
 
                 let modelName = (deviceDict["deviceTypeIdentifier"] as? String)
                     .flatMap { extractModelName(from: $0) } ?? name
 
-                let device = SPPDevice(
+                results.append(SPPDevice(
                     id: udid,
                     name: name,
                     modelName: modelName,
@@ -182,8 +253,7 @@ public actor SimulatorDeviceProvider {
                     connectionKind: .simulator,
                     capabilities: .all,
                     isSimulator: true
-                )
-                results.append(device)
+                ))
             }
         }
 
@@ -208,7 +278,7 @@ public actor SimulatorDeviceProvider {
 
     // MARK: Private helpers
 
-    private func parseSystemVersion(from runtimeKey: String) -> String {
+    private static func parseSystemVersion(from runtimeKey: String) -> String {
         // e.g. "com.apple.CoreSimulator.SimRuntime.iOS-17-0"
         guard let lastComponent = runtimeKey.split(separator: ".").last else {
             return runtimeKey
@@ -220,7 +290,7 @@ public actor SimulatorDeviceProvider {
         return "\(osName) \(versionParts)"
     }
 
-    private func extractModelName(from deviceTypeIdentifier: String) -> String? {
+    private static func extractModelName(from deviceTypeIdentifier: String) -> String? {
         // e.g. "com.apple.CoreSimulator.SimDeviceType.iPhone-15-Pro"
         guard let lastComponent = deviceTypeIdentifier.split(separator: ".").last else {
             return nil

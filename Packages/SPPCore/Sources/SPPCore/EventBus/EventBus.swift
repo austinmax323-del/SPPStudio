@@ -42,6 +42,20 @@ public struct FileSelectedEvent: SPPEvent {
     public init(fileID: UUID) { self.fileID = fileID }
 }
 
+/// Requests that the editor open/focus a file and move the caret to a 1-based
+/// line (optionally column), scrolling it into view. Emitted by the Problems
+/// panel for click-to-jump navigation.
+public struct NavigateToLineEvent: SPPEvent {
+    public let fileID: UUID
+    public let line: Int
+    public let column: Int?
+    public init(fileID: UUID, line: Int, column: Int? = nil) {
+        self.fileID = fileID
+        self.line = line
+        self.column = column
+    }
+}
+
 public struct BuildStartedEvent: SPPEvent {
     public let projectID: UUID
     public init(projectID: UUID) { self.projectID = projectID }

@@ -5,8 +5,8 @@ export async function renderVerificationWidget(container: HTMLElement, reader: F
   card.createDiv({ cls: "spp-native-widget-kicker", text: "Verification" });
   card.createDiv({ cls: "spp-native-widget-title", text: "Manual Proof" });
 
-  const verificationFlows = await reader.exists("VerificationFlows/README.md");
-  const latestArtifact = await reader.latestMarkdown(["VerificationArtifacts"]);
+  const verificationFlows = await reader.exists("60_DeliveryValidation/VerificationFlows/README.md");
+  const latestArtifact = await reader.latestMarkdown(["60_DeliveryValidation/VerificationArtifacts"]);
   const list = card.createDiv({ cls: "spp-native-state-list" });
 
   const flows = list.createDiv({ cls: `spp-native-state-row ${verificationFlows ? "" : "spp-native-empty"}` });

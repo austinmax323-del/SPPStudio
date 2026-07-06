@@ -52,18 +52,17 @@ This file tracks the feature milestones for SPPStudio. Status is honest: complet
 - Build start/stop/progress in toolbar
 - `.deb` output detection and Finder reveal
 
----
+### M6 — Editor intelligence
+Established editor intelligence foundations without breaking the pooled `NSTextView` architecture.
 
-## Active — M6: Editor intelligence
-
-Goal: establish editor intelligence foundations without breaking the pooled `NSTextView` architecture.
-
-- [ ] `FileDiagnosticsStore` — diagnostics owned by file identity, not editor instances
-- [ ] `BuildService` events → `FileDiagnosticsStore` → editor consumers
-- [ ] Diagnostics rendered via `NSLayoutManager` temporary attributes only (no permanent `NSTextStorage` mutation)
-- [ ] Gutter markers for errors/warnings without SwiftUI overlays
-- [ ] Hover and click-to-jump via native AppKit interaction
-- [ ] Code completion foundation: `NSTextView`-native, AppKit completion protocol
+- [x] `FileDiagnosticsStore` — diagnostics owned by file identity, not editor instances (one-way routing, per-file publisher)
+- [x] Build output → diagnostics: `DiagnosticsParser` + `BuildDiagnosticsCollector` parse clang/swiftc output during both build paths and populate the store atomically
+- [x] Diagnostics rendered via `NSLayoutManager` temporary attributes only (underline; no permanent `NSTextStorage` mutation)
+- [x] Gutter markers for errors/warnings in `LineNumberRulerView` (no SwiftUI overlays)
+- [x] Hover tooltips (native `NSTrackingArea`) and click-to-jump from a Problems panel (`NavigateToLineEvent`)
+- [x] Code completion foundation: `NSTextView`-native completion (⌥⎋ / F5), language vocabulary + document identifiers
+- [x] Problems console tab + toolbar error/warning badge
+- [x] SPPCore unit tests for the diagnostic model, parser, and path resolver
 
 ---
 
@@ -72,8 +71,8 @@ Goal: establish editor intelligence foundations without breaking the pooled `NST
 ### M7 — Build pipeline integration
 - Wire `sppctl build` CLI into the toolbar build action
 - Build configuration picker (Debug / Release)
-- Error/warning parsing from build output into `FileDiagnosticsStore`
-- Find & Replace panel
+- ~~Error/warning parsing from build output into `FileDiagnosticsStore`~~ — done in M6
+- Find & Replace panel — basic Find/Replace already available via `NSTextFinder` (⌘F / ⌘⌥F); a dedicated inline panel is still open
 
 ### M8 — Device and simulator
 - `SPPDeviceKit` — connected device list in the sidebar

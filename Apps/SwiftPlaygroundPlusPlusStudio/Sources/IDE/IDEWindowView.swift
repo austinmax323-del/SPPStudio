@@ -4,6 +4,7 @@ import SPPCore
 struct IDEWindowView: View {
 
     @EnvironmentObject var appEnv: AppEnvironment
+    @EnvironmentObject var diagnostics: FileDiagnosticsStore
 
     @State private var consoleExpanded: Bool = true
     @State private var showNewProject: Bool = false
@@ -30,6 +31,10 @@ struct IDEWindowView: View {
             showNewProject = true
         }
         .environmentObject(appEnv.simulatorService)
+        .environmentObject(appEnv.injectionPreflightService)
+        .environmentObject(appEnv.injectionExecutionService)
+        .environmentObject(appEnv.injectionVerificationService)
+        .environmentObject(appEnv.simulatorRunCoordinator)
     }
 
     // MARK: - Split View
@@ -90,6 +95,10 @@ struct IDEWindowView: View {
         }
 
         ToolbarItem(placement: .primaryAction) {
+            diagnosticsBadge
+        }
+
+        ToolbarItem(placement: .primaryAction) {
             Button(action: { consoleExpanded.toggle() }) {
                 Image(systemName: "terminal")
                     .symbolVariant(consoleExpanded ? .fill : .none)
@@ -100,6 +109,28 @@ struct IDEWindowView: View {
 
         ToolbarItem(placement: .principal) {
             projectStatusChip
+        }
+    }
+
+    @ViewBuilder
+    private var diagnosticsBadge: some View {
+        let errors = diagnostics.totalErrorCount
+        let warnings = diagnostics.totalWarningCount
+        if errors > 0 || warnings > 0 {
+            Button {
+                consoleExpanded = true
+                NotificationCenter.default.post(
+                    name: .sppShowConsoleTab,
+                    object: ConsoleTab.problems.rawValue
+                )
+            } label: {
+                HStack(spacing: 6) {
+                    IDEStatusBadge(count: errors, color: IDETheme.Colors.diagnosticError, icon: "xmark.octagon.fill")
+                    IDEStatusBadge(count: warnings, color: IDETheme.Colors.diagnosticWarning, icon: "exclamationmark.triangle.fill")
+                }
+            }
+            .buttonStyle(.plain)
+            .help("Show Problems")
         }
     }
 
